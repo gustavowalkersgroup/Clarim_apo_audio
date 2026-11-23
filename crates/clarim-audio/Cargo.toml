@@ -1,0 +1,36 @@
+[package]
+name = "clarim-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["dfn"]
+# DeepFilterNet3 ("strong" denoise). Without it the crate builds with RNNoise only.
+dfn = ["dep:deep_filter", "dep:ndarray", "dep:tract-core", "dep:tract-onnx", "dep:tract-pulse", "dep:tract-hir"]
+
+[dependencies]
+clarim-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+wasapi = "0.15"
+nnnoiseless = { version = "0.5", default-features = false }
+ringbuf = "0.4"
+crossbeam-channel.workspace = true
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Com",
+    "Win32_Media_Audio",
+] }
+# libDF (lib name `df`). Its tract-* requirements are `^0.21.4`, but tract 0.21.19 (latest 0.21.x when
+# this was written) uses ndarray 0.16 and `symbol_table`, which fails to compile against this libDF commit.
+# The exact `=0.21.4` optional deps below (enabled by `dfn`, never used directly) keep every tract-* crate
+# at 0.21.4 (the version libDF's own lock uses) even after an accidental `cargo update` or a lock rebuild.
+tract-core = { version = "=0.21.4", optional = true }
+tract-onnx = { version = "=0.21.4", optional = true }
+tract-pulse = { version = "=0.21.4", optional = true }
+tract-hir = { version = "=0.21.4", optional = true }
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "7b14b895fe7fc42cab72b4a4c1e49c982bd6404b", default-features = false, features = ["tract", "default-model"], optional = true }
+ndarray = { version = "0.15", optional = true }

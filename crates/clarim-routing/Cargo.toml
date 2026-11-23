@@ -1,0 +1,24 @@
+[package]
+name = "clarim-routing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clarim-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_WinRT",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }

@@ -1,0 +1,30 @@
+[package]
+name = "clarim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Clarim: mic AI noise suppression into a virtual mic + per-app output channels"
+
+[dependencies]
+clarim-core.workspace = true
+clarim-audio.workspace = true
+clarim-routing.workspace = true
+clarim-web.workspace = true
+clarim-svc.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger = "0.11"
+serde_json.workspace = true
+crossbeam-channel.workspace = true
+tray-icon = "0.26"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Com",
+] }

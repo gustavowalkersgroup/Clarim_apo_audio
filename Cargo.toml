@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/clarim"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+dirs = "5"
+crossbeam-channel = "0.5"
+
+clarim-core = { path = "crates/clarim-core" }
+clarim-audio = { path = "crates/clarim-audio" }
+clarim-routing = { path = "crates/clarim-routing" }
+clarim-web = { path = "crates/clarim-web" }
+clarim-svc = { path = "crates/clarim-svc" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
+
+# DSP must be fast even in dev builds
+[profile.dev.package."*"]
+opt-level = 2
+
+# tract-core's debug-only `check_compact` rejects the DeepFilterNet3 graphs ("duplicate name
+# /convt3/Conv.bias"), so with debug assertions on, DFN fails to initialise in dev/test builds
+# (release is unaffected). Keep this override or "strong" silently falls back to RNNoise in dev.
+[profile.dev.package.tract-core]
+debug-assertions = false

@@ -1,0 +1,13 @@
+[package]
+name = "clarim-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clarim-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tiny_http = "0.12"

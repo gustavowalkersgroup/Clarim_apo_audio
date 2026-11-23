@@ -1,0 +1,1046 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Clarim</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --bg: #0e1014; --surface: #161920; --surface2: #1f242e; --line: #2b303c;
+  --ctl: #66708a;            /* control borders: >= 3:1 on surfaces */
+  --lw: 150px;               /* label column of the mic card rows */
+  --text: #e9ecf2; --muted: #9ba4b5;
+  --accent: #4cc2ff; --on-accent: #04202f; --accent-hover: #7bd3ff;
+  --danger: #ff8b83; --danger-bg: rgba(255, 139, 131, .13);
+  --warn: #f2c14e; --warn-bg: rgba(242, 193, 78, .12);
+  --track: #3a4150; --focus: #9bdcff;
+  --m-ok: #4cc2ff; --m-hot: #f2c14e; --m-clip: #ff6b63;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f1f3f8; --surface: #ffffff; --surface2: #edf0f6; --line: #d3d8e3;
+    --ctl: #7a859c;
+    --text: #161a22; --muted: #4f596b;
+    --accent: #0a6cb3; --on-accent: #ffffff; --accent-hover: #085896;
+    --danger: #b42318; --danger-bg: rgba(180, 35, 24, .08);
+    --warn: #8a5a00; --warn-bg: rgba(138, 90, 0, .10);
+    --track: #cdd3df; --focus: #0a6cb3;
+    --m-ok: #0a8fd6; --m-hot: #c98a00; --m-clip: #d92d20;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 var(--font); }
+h1, h2, h3, p { margin: 0; }
+main { display: contents; }
+/* The page grows with its content and scrolls vertically when it must; only the app lists scroll inside their cards. */
+.app { min-height: 100vh; display: flex; flex-direction: column; gap: 8px; max-width: 1400px; margin: 0 auto; padding: 0 16px 14px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* header */
+.top { display: flex; align-items: center; gap: 14px; height: 44px; flex: none; }
+.logo { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 650; letter-spacing: .2px; }
+.logo svg { width: 24px; height: 24px; }
+.grow { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--ctl); font-size: 13px; background: var(--surface); }
+.chip .g { font-size: 12px; }
+.chip[data-s="ok"] { border-color: var(--accent); color: var(--accent); }
+.chip[data-s="err"] { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); font-weight: 600; }
+.chip[data-s="off"], .chip[data-s="wait"] { color: var(--muted); }
+.icon-btn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface); color: var(--text); cursor: pointer; }
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+.icon-btn svg { width: 18px; height: 18px; }
+.icon-btn.spin svg { animation: spin .7s linear; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* cards, rows */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.card-head h2, .sec-head h2 { font-size: 16px; font-weight: 650; }
+.mic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 26px; }
+.col { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.sub { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+.row { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); gap: 10px; align-items: center; min-height: 30px; }
+.row.has-val { grid-template-columns: var(--lw) minmax(0, 1fr) 58px; }
+.row > label, .field > label { font-size: 13px; }
+.val { font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; color: var(--muted); }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.hint { font-size: 12px; color: var(--muted); }
+.lblrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.hint.tight { margin-top: -3px; }
+.foot { font: 12px var(--mono); color: var(--muted); padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
+
+select { width: 100%; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
+select:disabled { opacity: .5; }
+.btn { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+a { color: var(--accent); }
+
+/* range */
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 0; background: transparent; cursor: pointer; --p: 0%; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--accent) var(--p), var(--track) var(--p)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: var(--text); border: 3px solid var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--track); }
+input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent); }
+input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--text); border: 3px solid var(--accent); }
+input[type=range]:disabled { opacity: .4; cursor: default; }
+input[type=range].big { height: 26px; }
+
+/* switch */
+.sw { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; cursor: pointer; font-size: 13px; position: relative; }
+.sw input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.trk { flex: none; width: 38px; height: 22px; border-radius: 11px; background: var(--track); border: 1px solid var(--ctl); position: relative; transition: background .15s; }
+.knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text); transition: transform .15s; }
+.sw input:checked + .trk { background: var(--accent); border-color: var(--accent); }
+.sw input:checked + .trk .knob { transform: translateX(16px); background: var(--on-accent); }
+.sw input:focus-visible + .trk { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sw .st { font-size: 12px; color: var(--muted); margin-left: 6px; }
+.sw input:disabled { cursor: default; }
+.sw input:disabled ~ .trk { opacity: .5; }
+
+/* segmented */
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--ctl); border-radius: 9px; background: var(--surface2); padding: 2px; }
+.seg label { position: relative; display: block; }
+.seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.seg span { display: block; text-align: center; padding: 4px 6px; border-radius: 7px; font-size: 13px; }
+.seg input:checked + span { background: var(--accent); color: var(--on-accent); font-weight: 650; }
+.seg input:checked + span::before { content: "\2713\00a0"; }
+.seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* meters */
+.meter-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) 62px; gap: 8px; align-items: center; font-size: 13px; }
+.meter { position: relative; height: 12px; border-radius: 6px; background: var(--track); overflow: hidden; }
+.meter i { position: absolute; inset: 0; clip-path: inset(0 100% 0 0); background: linear-gradient(to right, var(--m-ok) 0%, var(--m-ok) 75%, var(--m-hot) 88%, var(--m-clip) 100%); transition: clip-path 70ms linear; }
+.scale { display: grid; grid-template-columns: 62px minmax(0, 1fr) 62px; gap: 8px; margin-top: -4px; }
+.ticks { position: relative; height: 13px; }
+.ticks span { position: absolute; top: 0; transform: translateX(-50%); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vad { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.vad .dot { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--ctl); }
+.vad.on { color: var(--text); font-weight: 600; }
+.vad.on .dot { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.mini { font-size: 12px; color: var(--muted); }
+.prog { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; visibility: hidden; }
+.prog.on { visibility: visible; }
+.prog i { display: block; height: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); }
+.calib { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* banners, toasts */
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 5px 11px; border-radius: 8px; border: 1px solid; font-size: 13px; }
+.banner .g { font-weight: 700; flex: none; }
+.banner.err { background: var(--danger-bg); border-color: var(--danger); }
+.banner.err .g { color: var(--danger); }
+.banner.warn { background: var(--warn-bg); border-color: var(--warn); }
+.banner.warn .g { color: var(--warn); }
+.banner.info { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: var(--accent); }
+.banner.info .g { color: var(--accent); }
+.banner .btn { height: 26px; padding: 0 10px; margin-left: auto; flex: none; }
+.banner.act { flex-wrap: wrap; align-items: center; }
+.banner.act .t { flex: 1 1 220px; min-width: 0; }
+.banner.act .btn { height: 30px; padding: 0 14px; }
+.g.turn { display: inline-block; animation: spin 1.4s linear infinite; }
+.pill { font-size: 11px; font-weight: 650; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--warn); color: var(--warn); background: var(--warn-bg); white-space: nowrap; }
+.btn.attn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 55%, transparent); }
+
+/* advanced mic settings */
+.adv { margin-top: 8px; border-top: 1px solid var(--line); }
+.adv > summary { cursor: pointer; padding: 8px 0 6px; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.adv > summary .mini { font-weight: 400; }
+.adv-grid { margin-top: 4px; }
+
+/* output equalizer */
+.eqfs { border: 0; margin: 0; padding: 0; min-width: 0; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 650; }
+.btn[aria-pressed="true"]::before { content: "\2713"; }
+.hint.ok { color: var(--accent); }
+.hint.warn { color: var(--warn); }
+.setup { border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.setup p { font-weight: 600; }
+.setup p.hint { font-weight: 400; margin-top: 2px; }
+.setup-act { margin-top: 8px; }
+.toasts { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 10; width: min(520px, calc(100vw - 32px)); }
+.toast { display: flex; gap: 10px; align-items: flex-start; padding: 9px 13px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--ctl); border-left-width: 5px; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: 13px; cursor: pointer; }
+.toast.err { border-color: var(--danger); }
+.toast.info { border-color: var(--accent); }
+.toast.err .g { color: var(--danger); }
+.toast.info .g { color: var(--accent); }
+.toast .g { font-weight: 700; }
+
+/* channels */
+.sec-head { display: flex; align-items: baseline; gap: 14px; margin: 2px 0 6px; flex-wrap: wrap; }
+.note { font-size: 13px; color: var(--muted); }
+.note.warn { color: var(--text); background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 8px; padding: 2px 10px; }
+.chs { flex: 1 0 auto; display: flex; flex-direction: column; }
+.channels { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.ch { display: flex; flex-direction: column; gap: 8px; }
+.ch-head { display: flex; align-items: center; gap: 8px; }
+.ch-head h3 { font-size: 16px; font-weight: 650; }
+.tag { font-size: 11px; padding: 1px 7px; border: 1px solid var(--ctl); border-radius: 999px; color: var(--muted); }
+.count { margin-left: auto; font-size: 12px; color: var(--muted); }
+.ch-vol { display: flex; align-items: center; justify-content: space-between; }
+.pct { font-size: 30px; font-weight: 650; line-height: 1; font-variant-numeric: tabular-nums; }
+.pct small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+.mute { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; min-width: 94px; justify-content: center; }
+.mute svg { width: 18px; height: 18px; flex: none; }
+.mute:hover { border-color: var(--accent); }
+.mute.on { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); font-weight: 650; }
+/* Room for at least 4 app rows (a row with its tags is up to ~41 px, the gap 6 px) before the list scrolls inside the card. */
+.apps { list-style: none; margin: 0; padding: 6px 0 0; border-top: 1px solid var(--line); flex: 1 1 auto; overflow-y: auto; min-height: 190px; max-height: 380px; display: flex; flex-direction: column; gap: 6px; }
+.app-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 8px; align-items: center; }
+.app-name { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.apptag { font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); white-space: nowrap; }
+.apptag.warn { border-color: var(--warn); color: var(--warn); background: var(--warn-bg); }
+.pk { display: block; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; margin-top: 3px; }
+.pk i { display: block; height: 100%; background: var(--accent); transform-origin: left; transform: scaleX(0); }
+.app-row select { height: 28px; font-size: 12px; }
+.empty { font-size: 12px; color: var(--muted); padding: 4px 0; }
+
+@media (max-width: 900px) { :root { --lw: 112px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@media (max-width: 560px) { :root { --lw: 104px; } .top { flex-wrap: wrap; height: auto; padding: 8px 0; } .row.has-val { grid-template-columns: var(--lw) minmax(0, 1fr) 52px; } }
+</style>
+</head>
+<body>
+<noscript><p style="padding:24px">O painel do Clarim precisa de JavaScript.</p></noscript>
+<div class="app">
+  <header class="top">
+    <h1 class="logo">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--surface2)"/><path d="M8 14v4M13 10v12M18 6v20M23 12v8" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" fill="none"/></svg>
+      Clarim
+    </h1>
+    <span id="chip" class="chip" data-s="wait" role="status"><span class="g" id="chip-g" aria-hidden="true">&#9676;</span><span id="chip-t">Conectando…</span></span>
+    <span class="grow"></span>
+    <label class="sw"><span>Roteamento por app</span><input type="checkbox" role="switch" id="routing" disabled><span class="trk"><span class="knob"></span></span></label>
+    <button type="button" id="refresh" class="icon-btn" disabled aria-label="Atualizar dispositivos e apps" title="Atualizar dispositivos e apps">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 4v5h-5"/></svg>
+    </button>
+  </header>
+
+  <div id="conn" class="banner err" role="alert" hidden><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="conn-t"></span><button type="button" class="btn" id="conn-reload" hidden>Recarregar</button></div>
+  <div id="sonar" class="banner warn" role="status" hidden><span class="g" id="sonar-g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="sonar-t"></span></div>
+
+  <main inert>
+    <section class="card" aria-labelledby="h-mic">
+      <div class="card-head">
+        <h2 id="h-mic">Microfone</h2>
+        <label class="sw" style="min-height:0"><span>Ativo</span><input type="checkbox" role="switch" id="m-enabled"><span class="trk"><span class="knob"></span></span></label>
+      </div>
+      <div id="mic-err" class="banner err" role="alert" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="mic-err-t"></span></div>
+      <div id="silent" class="banner warn" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span>Sem sinal do microfone. Confira se ele não está mudo e se o Windows permite apps de desktop usarem o microfone (Configurações &gt; Privacidade &gt; Microfone).</span></div>
+
+      <div class="mic-grid">
+        <!-- Dispositivos e níveis -->
+        <div class="col">
+          <h3 class="sub">Dispositivos e níveis</h3>
+          <div class="row"><label for="m-in">Entrada</label><select id="m-in"></select></div>
+          <div class="row"><label for="m-out">Microfone virtual (saída)</label><select id="m-out"></select></div>
+          <div id="vm-warn" class="banner warn" hidden><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span>Nenhum microfone virtual encontrado. Instale o <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener noreferrer">VB-Cable</a> (gratuito) para usar no Discord, Meet e Zoom.</span></div>
+          <p id="vm-note" class="hint tight" hidden></p>
+          <div class="meter-row"><span id="l-min">Entrada</span><div class="meter" id="mt-in" role="meter" aria-labelledby="l-min" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60"><i></i></div><span class="val" id="db-in">−∞ dB</span></div>
+          <div class="meter-row"><span id="l-mout">Saída</span><div class="meter" id="mt-out" role="meter" aria-labelledby="l-mout" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60"><i></i></div><span class="val" id="db-out">−∞ dB</span></div>
+          <div class="scale" aria-hidden="true"><span></span><div class="ticks"><span style="left:0%">−60</span><span style="left:33.3%">−40</span><span style="left:66.7%">−20</span><span style="left:83.3%">−10</span><span style="left:100%;transform:translateX(-100%)">0</span></div><span></span></div>
+          <div><span class="vad" id="vad"><span class="dot" aria-hidden="true"></span><span id="vad-t">Sem voz</span></span></div>
+          <label class="sw"><span>Ouvir meu microfone <span class="st">(use fones)</span></span><input type="checkbox" role="switch" id="m-mon"><span class="trk"><span class="knob"></span></span></label>
+          <div class="row"><label for="m-monsel">Fones</label><select id="m-monsel"></select></div>
+          <div id="mon-warn" class="banner warn" role="status" hidden><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="mon-warn-t"></span></div>
+        </div>
+
+        <!-- Voz -->
+        <div class="col">
+          <h3 class="sub">Voz</h3>
+          <div class="field">
+            <div class="lblrow"><span id="l-dn">Supressão de ruído IA</span><span id="dn-note" class="mini"></span></div>
+            <div class="seg" role="radiogroup" aria-labelledby="l-dn">
+              <label><input type="radio" name="dn" value="off"><span>Desligado</span></label>
+              <label><input type="radio" name="dn" value="light"><span>Leve</span></label>
+              <label><input type="radio" name="dn" value="strong"><span>Forte</span></label>
+            </div>
+          </div>
+          <div class="row has-val"><label for="m-str">Intensidade</label><input type="range" id="m-str" min="0" max="100" step="1"><output aria-live="off" class="val" id="m-str-v" for="m-str"></output></div>
+          <label class="sw"><span>Foco na voz<span class="st" id="focus-st"></span></span><input type="checkbox" role="switch" id="m-focus" aria-describedby="h-focus"><span class="trk"><span class="knob"></span></span></label>
+          <p id="h-focus" class="hint tight">Atenua vozes e sons mais distantes que a sua. Calibre falando normalmente por 5 s.</p>
+          <div class="row has-val"><label for="m-sens">Sensibilidade</label><input type="range" id="m-sens" min="0" max="40" step="1" aria-describedby="h-sens"><output aria-live="off" class="val" id="m-sens-v" for="m-sens"></output></div>
+          <p id="h-sens" class="hint tight"></p>
+          <div class="calib">
+            <button type="button" class="btn primary" id="calib" aria-describedby="calib-need calib-res">Calibrar minha voz (5 s)</button>
+            <span class="pill" id="calib-need" hidden>sem calibrar</span>
+            <span class="mini" id="calib-res" aria-live="polite"></span>
+          </div>
+          <div class="prog" id="calib-prog" role="progressbar" aria-label="Progresso da calibração" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+        </div>
+
+        <!-- Tom e nível -->
+        <div class="col">
+          <h3 class="sub">Tom e nível</h3>
+          <label class="sw"><span>Filtro de graves</span><input type="checkbox" role="switch" id="m-hpf"><span class="trk"><span class="knob"></span></span></label>
+          <label class="sw"><span>Nivelamento automático</span><input type="checkbox" role="switch" id="m-level"><span class="trk"><span class="knob"></span></span></label>
+          <div class="row has-val"><label for="m-ig">Ganho de entrada</label><input type="range" id="m-ig" min="-20" max="20" step="1"><output aria-live="off" class="val" id="m-ig-v" for="m-ig"></output></div>
+          <div class="row"><label for="m-eq">Equalizador</label>
+            <select id="m-eq"><option value="flat">Neutro</option><option value="clarity">Clareza</option><option value="warm">Quente</option><option value="broadcast">Locutor</option></select>
+          </div>
+          <div class="row has-val"><label for="m-eqb">Graves</label><input type="range" id="m-eqb" min="-12" max="12" step="1"><output aria-live="off" class="val" id="m-eqb-v" for="m-eqb"></output></div>
+          <div class="row has-val"><label for="m-eqm">Médios</label><input type="range" id="m-eqm" min="-12" max="12" step="1"><output aria-live="off" class="val" id="m-eqm-v" for="m-eqm"></output></div>
+          <div class="row has-val"><label for="m-eqt">Agudos</label><input type="range" id="m-eqt" min="-12" max="12" step="1"><output aria-live="off" class="val" id="m-eqt-v" for="m-eqt"></output></div>
+          <p class="hint tight">Graves, médios e agudos se somam ao equalizador escolhido.</p>
+        </div>
+      </div>
+
+      <details class="adv">
+        <summary>Avançado <span class="mini">noise gate, ganho de saída e consumo</span></summary>
+        <div class="mic-grid adv-grid">
+          <div class="col">
+            <label class="sw"><span>Noise gate</span><input type="checkbox" role="switch" id="m-gate"><span class="trk"><span class="knob"></span></span></label>
+            <div class="row has-val"><label for="m-gate-th">Limiar do gate</label><input type="range" id="m-gate-th" min="-80" max="-20" step="1"><output aria-live="off" class="val" id="m-gate-th-v" for="m-gate-th"></output></div>
+          </div>
+          <div class="col">
+            <div class="row has-val"><label for="m-og">Ganho de saída</label><input type="range" id="m-og" min="-20" max="20" step="1"><output aria-live="off" class="val" id="m-og-v" for="m-og"></output></div>
+          </div>
+        </div>
+        <p class="foot" id="dsp"></p>
+      </details>
+    </section>
+
+    <section class="chs" aria-labelledby="h-ch">
+      <div class="sec-head"><h2 id="h-ch">Canais</h2><p id="routing-note" class="note warn" hidden>Roteamento por app desligado: o Clarim só observa, sem mover apps nem mudar volumes.</p></div>
+      <div class="channels" id="channels"></div>
+    </section>
+
+    <section class="card" aria-labelledby="h-eq">
+      <div class="card-head"><h2 id="h-eq">Equalizador de saída</h2></div>
+      <div id="eq-busy" class="banner info" role="status" hidden style="margin-bottom:8px"><span class="g turn" aria-hidden="true">&#9696;</span><span id="eq-busy-t"></span></div>
+      <div id="eq-err" class="banner warn" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="eq-err-t"></span></div>
+      <div id="eq-setup" class="setup" hidden>
+        <p>Para equalizar o que você ouve, o Clarim instala o Equalizer APO (grátis) por você.</p>
+        <p class="hint">Baixa cerca de 12 MB de <a href="https://sourceforge.net/projects/equalizerapo/" target="_blank" rel="noopener noreferrer">sourceforge.net</a>, leva ~1 min e o som pode piscar.</p>
+        <div class="setup-act"><button type="button" class="btn primary" id="eq-install">Instalar equalizador</button></div>
+      </div>
+      <div id="eq-restart" class="banner warn act" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span class="t">Falta reiniciar o áudio pra valer: a mudança no equalizador só vale depois disso. O som some por uns segundos.</span><button type="button" class="btn primary" id="eq-restart-btn">Reiniciar áudio agora</button></div>
+      <div id="eq-ctl" hidden>
+        <div class="mic-grid">
+          <div class="col">
+            <h3 class="sub">Aparelho e predefinição</h3>
+            <div class="row"><label for="eq-dev">Aparelho</label><select id="eq-dev"></select></div>
+            <label class="sw"><span>Equalizador neste aparelho</span><input type="checkbox" role="switch" id="eq-on"><span class="trk"><span class="knob"></span></span></label>
+            <p id="eq-st" class="hint" hidden></p>
+            <div class="presets" id="eq-presets" role="group" aria-label="Predefinições">
+              <button type="button" class="btn" data-p="neutro" aria-pressed="false">Neutro</button>
+              <button type="button" class="btn" data-p="graves" aria-pressed="false">Mais graves</button>
+              <button type="button" class="btn" data-p="clareza" aria-pressed="false">Clareza</button>
+              <button type="button" class="btn" data-p="agudos" aria-pressed="false">Agudos</button>
+            </div>
+            <p id="eq-bt" class="hint" hidden>Em fones Bluetooth o Equalizer APO pode não funcionar.</p>
+          </div>
+          <div class="col">
+            <h3 class="sub">Tom</h3>
+            <div class="row has-val"><label for="o-b">Graves</label><input type="range" id="o-b" min="-12" max="12" step="1"><output aria-live="off" class="val" id="o-b-v" for="o-b"></output></div>
+            <div class="row has-val"><label for="o-m">Médios</label><input type="range" id="o-m" min="-12" max="12" step="1"><output aria-live="off" class="val" id="o-m-v" for="o-m"></output></div>
+            <div class="row has-val"><label for="o-t">Agudos</label><input type="range" id="o-t" min="-12" max="12" step="1"><output aria-live="off" class="val" id="o-t-v" for="o-t"></output></div>
+            <p class="hint tight">Vale para tudo que toca neste aparelho, não só para um canal.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+// Per-run API token injected by the server; send it as X-Clarim-Token on every /api request.
+window.CLARIM_TOKEN = "__CLARIM_TOKEN__";
+</script>
+<script>
+(() => {
+'use strict';
+const TOKEN = window.CLARIM_TOKEN;
+const $ = (s, r = document) => r.querySelector(s);
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) { if (k === 'text') e.textContent = attrs[k]; else e.setAttribute(k, attrs[k]); }
+  e.append(...kids);
+  return e;
+}
+const CH = [['game', 'Jogo'], ['chat', 'Chat'], ['media', 'Mídia'], ['aux', 'Aux']];
+const LABEL = Object.fromEntries(CH);
+const DN = { off: 'Desligado', light: 'Leve', strong: 'Forte' };
+const MINUS = '−';
+const fmtDb = (v, d = 0) => (v > 0.04 ? '+' : v < -0.04 ? MINUS : '') + Math.abs(v).toFixed(d) + ' dB';
+const toDb = p => (p > 1e-6 ? 20 * Math.log10(p) : -120);
+const pct60 = db => Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+
+// ---------------------------------------------------------------- state
+let S = null;                 // last snapshot; config.mic / config.channels are edited in place
+let pending = 0;              // posts queued or in flight
+let lastChange = 0;           // time of the last local edit / completed post
+let micDirty = false;
+const chDirty = {};
+const eqDirty = {};           // output equalizer edits not sent yet, by endpoint id
+let force = false;            // render over controls the user is touching (after a failed post)
+let calibUntil = 0, sawCal = false;
+const stamp = () => { lastChange = performance.now(); };
+const timers = {};
+const later = (k, f, ms = 150) => { clearTimeout(timers[k]); timers[k] = setTimeout(f, ms); };
+const now = (k, f) => { clearTimeout(timers[k]); f(); };
+const busy = e => !force && (e === document.activeElement || e.dataset.drag === '1');
+const isDirty = () => pending > 0 || micDirty || Object.values(chDirty).some(Boolean) || Object.values(eqDirty).some(Boolean);
+
+// ---------------------------------------------------------------- network
+async function api(path, body) {
+  const opt = { headers: { 'X-Clarim-Token': TOKEN }, cache: 'no-store' };
+  if (body !== undefined) { opt.method = 'POST'; opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  let j = null;
+  try { j = await r.json(); } catch (_) { /* no body */ }
+  if (!r.ok) { const e = new Error((j && j.error) || 'Erro ' + r.status); e.status = r.status; throw e; }
+  return j;
+}
+
+// One post at a time, in order, so the agent never sees a stale setting after a newer one.
+let chain = Promise.resolve();
+function queue(fn) {
+  pending++; stamp();
+  const p = chain.then(fn).then(() => true, e => {
+    if (e.status === 403) stale(); else toast(e.message || 'Falha ao falar com o Clarim.', 'err');
+    return false;
+  });
+  // after a failed post, re-read the real state over whatever the user was touching
+  chain = p.then(ok => {
+    pending--; stamp();
+    if (!ok) { force = true; return pollState(true).finally(() => { force = false; }); }
+  });
+  return p;
+}
+const sendMic = () => queue(async () => { if (!micDirty) return; micDirty = false; await api('/api/mic', S.config.mic); });
+const sendCh = id => queue(async () => { if (!chDirty[id]) return; chDirty[id] = false; await api('/api/channel', { id, settings: S.config.channels[id] }); });
+const sendEq = dev => queue(async () => { if (!eqDirty[dev]) return; eqDirty[dev] = false; await api('/api/output_eq', { device_id: dev, eq: S.config.output_eq[dev] }); });
+
+let fails = 0;
+let halted = false;           // token rejected: this page is from a previous run, stop polling
+async function pollState(forceApply) {
+  if (halted) return;
+  const t0 = performance.now();
+  try {
+    const s = await api('/api/state');
+    fails = 0; showConn(null);
+    if (!forceApply && (isDirty() || t0 < lastChange)) return; // the user changed something meanwhile
+    S = s; render();
+  } catch (e) {
+    if (e.status === 403) stale();
+    else if (++fails >= 2) showConn('Sem conexão com o Clarim. Tentando reconectar…');
+  }
+}
+(function loop() { if (!halted) pollState().finally(() => setTimeout(loop, 2000)); })();
+
+let meterBusy = false, meterTimer = 0;
+function kickMeters() {
+  if (halted || meterBusy || meterTimer || !S || document.visibilityState !== 'visible') return;
+  meterBusy = true;
+  api('/api/meters').then(applyMeters).catch(e => { if (e.status === 403) stale(); }).finally(() => {
+    meterBusy = false;
+    meterTimer = setTimeout(() => { meterTimer = 0; kickMeters(); }, 100);
+  });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { pollState(); kickMeters(); } });
+
+function showConn(msg, reload) {
+  $('#conn').hidden = !msg;
+  $('#conn-t').textContent = msg || '';
+  $('#conn-reload').hidden = !reload;
+}
+function stale() { halted = true; showConn('Esta janela ficou desatualizada (o Clarim foi reiniciado). Recarregue para continuar.', true); }
+$('#conn-reload').addEventListener('click', () => location.reload());
+
+let lastToast = '', lastToastAt = 0;
+function toast(msg, kind = 'info') {
+  const t0 = performance.now();
+  if (msg === lastToast && t0 - lastToastAt < 2000) return;
+  lastToast = msg; lastToastAt = t0;
+  const box = $('#toasts');
+  const t = el('div', { class: 'toast ' + kind, role: kind === 'err' ? 'alert' : 'status' }, el('span', { class: 'g', 'aria-hidden': 'true', text: kind === 'err' ? '⚠︎' : '✓' }), el('span', { text: msg }));
+  t.addEventListener('click', () => t.remove());
+  box.append(t);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => t.remove(), kind === 'err' ? 7000 : 3500);
+}
+
+// ---------------------------------------------------------------- helpers
+const paint = e => e.style.setProperty('--p', ((e.value - e.min) / (e.max - e.min) * 100) + '%');
+window.addEventListener('pointerup', () => document.querySelectorAll('[data-drag]').forEach(e => delete e.dataset.drag));
+window.addEventListener('pointercancel', () => document.querySelectorAll('[data-drag]').forEach(e => delete e.dataset.drag));
+document.addEventListener('pointerdown', ev => { if (ev.target instanceof HTMLInputElement && ev.target.type === 'range') ev.target.dataset.drag = '1'; });
+
+// Label for a saved device that is not plugged in. Channels fall back to the Windows default by themselves;
+// the mic has no fallback for a chosen device, so its selects say what to do.
+const GONE_CHANNEL = 'Indisponível (será usado o padrão)';
+const GONE_MIC = 'Indisponível — reconecte ou escolha outro';
+
+/** opts: [{v, t}]; keeps the dropdown untouched while the user has it open. */
+function fillSelect(sel, opts, value, gone = GONE_CHANNEL) {
+  if (!opts.some(o => o.v === value)) opts = opts.concat({ v: value, t: gone });
+  const sig = JSON.stringify(opts);
+  if (document.activeElement !== sel || force) {
+    if (sel._sig !== sig) { sel._sig = sig; sel.replaceChildren(...opts.map(o => el('option', { value: o.v, text: o.t }))); }
+    sel.value = value;
+  }
+  const cur = sel.selectedOptions[0];
+  sel.title = cur ? cur.textContent : '';
+}
+const devOpts = (list, first) => [{ v: '', t: first }].concat(list.map(d => ({ v: d.id, t: d.name + (d.is_virtual ? ' (virtual)' : '') })));
+
+class Meter {
+  constructor(root, dbEl) { this.root = root; this.fill = root.firstElementChild; this.dbEl = dbEl; this.lv = -120; }
+  set(peak) {
+    this.lv = Math.max(toDb(peak), this.lv - 4);               // instant attack, ~40 dB/s release
+    const c = Math.max(-60, Math.min(0, this.lv));
+    this.fill.style.clipPath = 'inset(0 ' + (100 - pct60(c)) + '% 0 0)';
+    const txt = this.lv <= -59 ? MINUS + '∞ dB' : fmtDb(c);
+    if (txt !== this.dbEl.textContent) { this.dbEl.textContent = txt; this.root.setAttribute('aria-valuenow', Math.round(c)); this.root.setAttribute('aria-valuetext', txt); }
+  }
+}
+
+// ---------------------------------------------------------------- microphone card
+const chk = (id, key) => ({ id, key, k: 'check' });
+const rng = (id, key, o) => ({ id, key, k: 'range', to: v => v, from: v => v, fmt: v => v + '', ...o });
+const MIC = [
+  chk('m-enabled', 'enabled'), chk('m-hpf', 'hpf_on'), chk('m-level', 'auto_level'), chk('m-gate', 'gate_on'), chk('m-focus', 'voice_focus'), chk('m-mon', 'monitor_on'),
+  rng('m-str', 'denoise_strength', { to: v => v / 100, from: v => Math.round(v * 100), fmt: v => Math.round(v * 100) + '%' }),
+  rng('m-sens', 'voice_focus_db', { to: v => -v, from: v => -v, fmt: v => Math.abs(v) + ' dB' }),
+  rng('m-gate-th', 'gate_threshold_db', { fmt: v => fmtDb(v) }),
+  rng('m-ig', 'input_gain_db', { fmt: v => fmtDb(v) }),
+  rng('m-og', 'output_gain_db', { fmt: v => fmtDb(v) }),
+  rng('m-eqb', 'eq_bass_db', { fmt: v => fmtDb(v) }),
+  rng('m-eqm', 'eq_mid_db', { fmt: v => fmtDb(v) }),
+  rng('m-eqt', 'eq_treble_db', { fmt: v => fmtDb(v) }),
+  { id: 'm-eq', key: 'eq', k: 'select' },
+  { id: 'm-in', key: 'input_id', k: 'devsel', list: s => s.inputs, first: 'Automático (microfone real)' },
+  { id: 'm-out', key: 'output_id', k: 'devsel', list: s => s.outputs.filter(d => d.is_virtual || d.id === s.config.mic.output_id), first: 'Automático (cabo virtual)' },
+  { id: 'm-monsel', key: 'monitor_id', k: 'devsel', list: s => s.outputs.filter(d => !d.is_virtual || d.id === s.config.mic.monitor_id), first: 'Padrão do Windows' },
+];
+
+/** Readout next to a slider, plus a spoken value with its unit. */
+function showRange(b) {
+  const e = b.e, txt = b.fmt(b.to(+e.value));
+  $('#' + b.id + '-v').textContent = txt;
+  if (b.id === 'm-sens') {
+    const n = Math.abs(+e.value);
+    $('#h-sens').textContent = 'Atenua o que estiver mais de ' + n + ' dB abaixo da sua voz.';
+    e.setAttribute('aria-valuetext', n + ' dB abaixo da sua voz');
+  } else e.setAttribute('aria-valuetext', txt);
+}
+
+function micChanged(b) {
+  const e = b.e, m = S.config.mic;
+  if (b.k === 'check') m[b.key] = e.checked;
+  else if (b.k === 'range') m[b.key] = b.to(+e.value);
+  else m[b.key] = e.value === '' ? null : e.value;
+  micDirty = true; stamp();
+  syncDeps();
+}
+for (const b of MIC) {
+  const e = b.e = $('#' + b.id);
+  if (b.k === 'range') {
+    e.addEventListener('input', () => {
+      micChanged(b); paint(e); showRange(b);
+      later('mic', sendMic);
+    });
+    e.addEventListener('change', () => now('mic', sendMic));
+  } else {
+    e.addEventListener('change', () => { micChanged(b); if (b.k === 'devsel') e.title = e.selectedOptions[0].textContent; now('mic', sendMic); });
+  }
+}
+document.querySelectorAll('input[name=dn]').forEach(r => r.addEventListener('change', () => {
+  S.config.mic.denoise = r.value; micDirty = true; stamp(); syncDeps(); now('mic', sendMic);
+}));
+
+/** Enable/disable controls that depend on a toggle, from the in-memory settings. */
+function syncDeps() {
+  const m = S.config.mic;
+  $('#m-str').disabled = m.denoise === 'off';
+  $('#m-sens').disabled = !m.voice_focus;
+  $('#m-gate-th').disabled = !m.gate_on;
+  const noMic = !S.mic.running || S.mic.calibrating || performance.now() < calibUntil;
+  $('#calib').disabled = noMic;
+  $('#calib').title = !S.mic.running ? 'O microfone precisa estar ativo para calibrar.' : '';
+  // Foco na voz ligado sem calibração: o Clarim só supõe o nível da sua voz, então destaque o botão
+  const needs = m.voice_focus && m.voice_level_db == null;
+  $('#calib-need').hidden = !needs;
+  $('#calib').classList.toggle('attn', needs);
+}
+
+function renderMic() {
+  const m = S.config.mic;
+  for (const b of MIC) {
+    const e = b.e;
+    if (b.k === 'check') e.checked = m[b.key];
+    else if (b.k === 'range') {
+      if (!busy(e)) e.value = b.from(m[b.key]);
+      paint(e); showRange(b);
+    } else if (b.k === 'select') { if (!busy(e)) e.value = m[b.key]; }
+    else fillSelect(e, devOpts(b.list(S), b.first), m[b.key] || '', GONE_MIC);
+  }
+  document.querySelectorAll('input[name=dn]').forEach(r => { r.checked = r.value === m.denoise; });
+  const found = S.virtual_mic_found;
+  $('#vm-warn').hidden = found;
+  const note = $('#vm-note');
+  note.hidden = !found || !S.mic.output_name;
+  const out = S.mic.output_name || '';
+  note.textContent = /cable input/i.test(out) ? 'Nos apps de chamada, escolha o microfone “CABLE Output”.' : 'Nos apps de chamada, escolha o microfone de mesmo nome (lado de gravação).';
+  syncDeps();
+  renderMicStatus();
+  const calibrated = m.voice_level_db != null;
+  const res = $('#calib-res');
+  res.textContent = calibrated ? 'Calibrado' : 'Não calibrado';
+  res.title = calibrated ? 'Nível da sua voz: ' + fmtDb(m.voice_level_db, 1) : 'Sem calibração, o Clarim assume ' + fmtDb(-26) + '.';
+}
+
+/**
+ * The engine reports some soft notes through `mic.error` (the mic itself runs fine); none of them is a failure,
+ * so none turns the chip red or gets the red banner. They match the first words of the engine's texts.
+ *  - calibration outcomes: a toast (see trackNote), the only ones that are toasted
+ *  - "Microfone silenciado...": the yellow #silent banner
+ *  - "Ouvir meu microfone...": the yellow #mon-warn banner under Fones
+ *  - "Reconectando ao áudio do Windows...": Windows Audio is restarting (after "Reiniciar áudio"); the engine retries by
+ *    itself, so the chip just says so
+ */
+const isNote = e => /^Calibração/.test(e || '');
+const isSilentNote = e => /^Microfone silenciado/.test(e || '');
+const isMonitorNote = e => /^Ouvir meu microfone/.test(e || '');
+const isReconnecting = e => /^Reconectando ao áudio do Windows/.test(e || '');
+const isFault = e => !!e && !isNote(e) && !isSilentNote(e) && !isMonitorNote(e) && !isReconnecting(e);
+
+/** Parts of the mic card driven by status (also refreshed from the 100 ms meters). */
+function renderMicStatus() {
+  const st = S.mic, m = S.config.mic;
+  const fault = isFault(st.error) ? st.error : null;
+  const err = $('#mic-err');
+  // With no virtual mic the VB-Cable warning above already says it: do not repeat it as an error.
+  err.hidden = !fault || !S.virtual_mic_found;
+  $('#mic-err-t').textContent = fault ? 'Erro: ' + fault : '';
+  const mon = isMonitorNote(st.error) ? st.error : '';
+  $('#mon-warn').hidden = !mon;
+  $('#mon-warn-t').textContent = mon;
+  const dnNote = $('#dn-note');
+  if (m.denoise !== 'off' && st.running && st.denoise_active && st.denoise_active !== m.denoise) dnNote.textContent = 'Em uso: ' + DN[st.denoise_active] + ' (' + DN[m.denoise] + ' não iniciou)';
+  else if (m.denoise !== 'off' && st.running) dnNote.textContent = 'Em uso: ' + DN[m.denoise] + (m.denoise === 'strong' ? ' (DeepFilterNet3)' : ' (RNNoise)');
+  else dnNote.textContent = '';
+  const focusSt = $('#focus-st');
+  focusSt.textContent = m.voice_focus && st.running ? (st.focus_open ? '● passando' : '○ atenuando') : '';
+  const chip = $('#chip');
+  let s = 'wait', g = '◌', t = 'Iniciando…';
+  if (fault) { s = 'err'; g = '⚠︎'; t = 'Mic com erro'; }
+  else if (m.enabled && isReconnecting(st.error)) { s = 'wait'; g = '◌'; t = 'Reconectando o áudio…'; }
+  else if (!m.enabled) { s = 'off'; g = '○'; t = 'Mic desligado'; }
+  else if (st.running) { s = 'ok'; g = '●'; t = 'Mic ativo'; }
+  chip.dataset.s = s; $('#chip-g').textContent = g; $('#chip-t').textContent = t;
+  const dsp = $('#dsp');
+  dsp.textContent = '';
+  dsp.append(el('span', { text: st.running ? 'DSP ' + st.dsp_us + ' µs · latência ~' + Math.round(st.latency_ms) + ' ms' : 'Microfone parado' }));
+  if (st.running && st.input_name) dsp.append(el('span', { text: 'Entrada: ' + st.input_name }));
+}
+
+function showCalibration(calibrating, p, running) {
+  const prog = $('#calib-prog');
+  prog.classList.toggle('on', calibrating);
+  prog.firstElementChild.style.transform = 'scaleX(' + p + ')';
+  prog.setAttribute('aria-valuenow', Math.round(p * 100));
+  const btn = $('#calib');
+  const txt = calibrating ? 'Calibrando… fale normalmente (' + Math.max(1, Math.ceil((1 - p) * 5)) + ' s)' : 'Calibrar minha voz (5 s)';
+  if (btn.textContent !== txt) btn.textContent = txt;
+  btn.disabled = calibrating || !running;
+}
+/** Called with every meters sample: drives the UI and reports the result once a run ends. */
+function trackCalibration(st) {
+  const optimistic = performance.now() < calibUntil;
+  showCalibration(st.calibrating || optimistic, st.calibrating ? st.calibration_progress : 0, st.running);
+  if (st.calibrating) { sawCal = true; return; }
+  if (!sawCal || optimistic) return;
+  sawCal = false;
+  const before = S.config.mic.voice_level_db;
+  force = true;
+  pollState(true).finally(() => {
+    force = false;
+    const v = S.config.mic.voice_level_db;
+    if (v == null || v === before) {
+      // the engine's own note ("Calibração falhou...") may have been toasted a moment ago: do not say it twice
+      if (performance.now() - noteAt > 3000) toast('Não consegui ouvir sua voz. Fale normalmente, perto do microfone, e tente de novo.', 'err');
+    } else toast('Voz calibrada.');
+  });
+}
+$('#calib').addEventListener('click', () => {
+  calibUntil = performance.now() + 1500; sawCal = false;
+  showCalibration(true, 0, true);
+  queue(async () => {
+    try { await api('/api/calibrate', { seconds: 5 }); } catch (e) { calibUntil = 0; showCalibration(false, 0, S.mic.running); throw e; }
+  });
+});
+
+// ---------------------------------------------------------------- channels
+const cols = {};
+const rows = new Map();   // exe -> {pids, pk}
+function buildChannels() {
+  for (const [id, label] of CH) {
+    const c = cols[id] = {};
+    const root = el('section', { class: 'card ch', 'aria-labelledby': 'chn-' + id });
+    c.tag = el('span', { class: 'tag', text: 'padrão' });
+    c.count = el('span', { class: 'count' });
+    root.append(el('div', { class: 'ch-head' }, el('h3', { id: 'chn-' + id, text: label }), c.tag, c.count));
+    c.pct = el('span', { class: 'pct' });
+    c.mute = el('button', { type: 'button', class: 'mute' });
+    root.append(el('div', { class: 'ch-vol' }, c.pct, c.mute));
+    c.vol = el('input', { type: 'range', class: 'big', min: '0', max: '100', step: '1', id: 'vol-' + id, 'aria-label': 'Volume do canal ' + label });
+    root.append(c.vol);
+    c.dev = el('select', { id: 'dev-' + id, 'aria-label': 'Saída do canal ' + label });
+    root.append(c.dev);
+    c.list = el('ul', { class: 'apps', 'aria-label': 'Apps no canal ' + label });
+    root.append(c.list);
+    $('#channels').append(root);
+
+    const set = () => { chDirty[id] = true; stamp(); };
+    c.vol.addEventListener('input', () => { S.config.channels[id].volume = c.vol.value / 100; set(); paintCh(id); later('ch-' + id, () => sendCh(id)); });
+    c.vol.addEventListener('change', () => now('ch-' + id, () => sendCh(id)));
+    c.mute.addEventListener('click', () => { const s = S.config.channels[id]; s.muted = !s.muted; set(); paintCh(id); now('ch-' + id, () => sendCh(id)); });
+    c.dev.addEventListener('change', () => { S.config.channels[id].device_id = c.dev.value || null; set(); c.dev.title = c.dev.selectedOptions[0].textContent; now('ch-' + id, () => sendCh(id)); });
+  }
+}
+const SPK = '<path d="M4 9v6h4l5 4V5L8 9H4z"/>';
+const SPK_ON = SPK + '<path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/>';
+const SPK_OFF = SPK + '<path d="M17 9l5 6M22 9l-5 6"/>';
+function paintCh(id) {
+  const c = cols[id], s = S.config.channels[id];
+  const v = Math.round(s.volume * 100);
+  if (!busy(c.vol)) c.vol.value = v;
+  paint(c.vol);
+  c.pct.textContent = '';
+  c.pct.append(String(c.vol.value), el('small', { text: '%' }));
+  c.vol.setAttribute('aria-valuetext', c.vol.value + '%');
+  if (c.muted === s.muted) return;
+  c.muted = s.muted;
+  c.mute.classList.toggle('on', s.muted);
+  c.mute.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (s.muted ? SPK_OFF : SPK_ON) + '</svg>';
+  c.mute.append(el('span', { text: s.muted ? 'Mutado' : 'Mutar' }), el('span', { class: 'sr', text: ' canal ' + LABEL[id] }));
+  c.mute.title = s.muted ? 'Reativar o som deste canal' : 'Silenciar este canal';
+}
+
+/**
+ * The output endpoint a channel is routed to: its own device, if that is plugged in. A channel on the Windows default
+ * (or whose device is gone) leaves each app on the default of the role it opens, and the console and communications
+ * defaults can differ (a headset for calls), so no single endpoint is "right": say nothing rather than guess.
+ */
+function wantedDevice(channel) {
+  const own = S.config.channels[channel] && S.config.channels[channel].device_id;
+  return own && S.outputs.some(d => d.id === own) ? own : null;
+}
+/** The virtual-mic endpoint the mic writes into: it must never be offered as a channel output. */
+const isMicTarget = d => d.name === S.mic.output_name || (!!S.config.mic.output_id && d.id === S.config.mic.output_id);
+
+function groups() {
+  const g = new Map();
+  for (const s of S.sessions) {
+    let r = g.get(s.exe);
+    if (!r) { r = { exe: s.exe, name: s.name, pids: [], channel: s.channel, has_rule: s.has_rule, in_call: false, unrouted: false }; g.set(s.exe, r); }
+    r.pids.push(s.pid);
+    if (s.in_call) { r.in_call = true; r.channel = s.channel; }   // shown where it really plays: Chat
+    // An active app still on another endpoint than its channel's: Windows without per-app routing, or an app ignoring it.
+    // Idle sessions are skipped: they only move when they start playing again.
+    if (S.config.routing_enabled && s.active) {
+      const want = wantedDevice(s.channel);
+      if (want && s.device_id !== want) r.unrouted = true;
+    }
+  }
+  const pretty = r => (r.name === r.exe.replace(/\.exe$/, '') ? r.name.charAt(0).toUpperCase() + r.name.slice(1) : r.name);
+  return [...g.values()].map(r => ({ ...r, name: pretty(r) })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+}
+
+function renderChannels() {
+  const byCh = { game: [], chat: [], media: [], aux: [] };
+  for (const g of groups()) (byCh[g.channel] || byCh.game).push(g);
+  rows.clear();
+  for (const [id] of CH) {
+    const c = cols[id];
+    c.tag.hidden = S.config.default_channel !== id;
+    c.tag.title = 'Apps sem regra caem neste canal';
+    paintCh(id);
+    const cur = S.config.channels[id].device_id || '';
+    fillSelect(c.dev, devOpts(S.outputs.filter(d => d.id === cur || !isMicTarget(d)), 'Padrão do Windows'), cur);
+    const list = byCh[id];
+    c.count.textContent = list.length === 1 ? '1 app' : list.length + ' apps';
+    const sig = JSON.stringify([S.config.default_channel, list.map(g => [g.exe, g.name, g.has_rule, S.config.app_rules[g.exe] || '', g.channel, g.in_call, g.unrouted])]);
+    if (c.sig !== sig && (force || !c.list.contains(document.activeElement))) {
+      c.sig = sig;
+      c.list.replaceChildren(...(list.length ? list.map(g => appRow(g)) : [el('li', { class: 'empty', text: 'Nenhum app tocando' })]));
+    }
+    // rebuilt or not, keep the live bar map pointing at the current elements and pids
+    for (const li of c.list.querySelectorAll('li[data-exe]')) {
+      const g = list.find(x => x.exe === li.dataset.exe);
+      if (g) li._r.pids = g.pids;
+      rows.set(li.dataset.exe, li._r);
+    }
+  }
+}
+function appRow(g) {
+  const pk = el('i');
+  const sel = el('select', { 'aria-label': 'Canal de ' + g.name });
+  sel.append(el('option', { value: '', text: 'Sem regra (' + LABEL[S.config.default_channel] + ')' }), ...CH.map(([id, l]) => el('option', { value: id, text: l })));
+  // the select shows the RULE (an app in a call plays on Chat, but its rule may still say Mídia)
+  sel.value = g.has_rule ? (S.config.app_rules[g.exe] || g.channel) : '';
+  sel.title = g.exe;
+  sel.addEventListener('change', () => assign(g.exe, sel.value || null));
+  const tags = el('span', { class: 'app-tags' });
+  if (g.in_call) tags.append(el('span', { class: 'apptag', title: 'Este app está usando o microfone: enquanto durar a chamada, o som dele toca no Chat.', text: 'em chamada' }));
+  if (g.unrouted) tags.append(el('span', { class: 'apptag warn', title: 'O app ainda toca em outra saída que a do canal. Alguns apps só mudam ao pausar e retomar o áudio, ou ao serem reabertos.', text: 'não roteado' }));
+  tags.hidden = !tags.children.length;
+  const li = el('li', { class: 'app-row', 'data-exe': g.exe }, el('div', null, el('span', { class: 'app-name', title: g.exe + (g.pids.length > 1 ? ' (' + g.pids.length + ' processos)' : ''), text: g.name }), tags, el('span', { class: 'pk' }, pk)), sel);
+  li._r = { pids: g.pids, pk };
+  return li;
+}
+function assign(exe, ch) {
+  for (const s of S.sessions) if (s.exe === exe) {
+    const rule = ch || S.config.default_channel;
+    s.has_rule = !!ch;
+    s.channel = s.in_call && rule === 'media' ? 'chat' : rule;   // only a Mídia app moves to Chat during a call
+  }
+  if (ch) S.config.app_rules[exe] = ch; else delete S.config.app_rules[exe];
+  force = true; renderChannels(); force = false;   // rebuild even though the old select has focus
+  const sel = document.querySelector('li[data-exe="' + CSS.escape(exe) + '"] select');
+  if (sel) sel.focus();
+  queue(() => api('/api/assign', { exe, channel: ch }));
+}
+
+// ---------------------------------------------------------------- output equalizer (Equalizer APO)
+// One EQ per playback DEVICE (Clarim's channels never touch app audio). Presets are bass / mid / treble gains in dB.
+const EQ0 = { bass_db: 0, mid_db: 0, treble_db: 0 };
+const PRESETS = {
+  neutro: EQ0,
+  graves: { bass_db: 5, mid_db: 0, treble_db: 0 },
+  clareza: { bass_db: -1, mid_db: 2, treble_db: 3 },
+  agudos: { bass_db: 0, mid_db: 0, treble_db: 4 },
+};
+const OEQ = [['bass_db', 'o-b'], ['mid_db', 'o-m'], ['treble_db', 'o-t']];
+let eqDev = '';               // endpoint id picked in the Aparelho select
+
+/** Real (non-virtual) outputs, the ones the channels play on first, each labelled with those channels. */
+function eqDevices() {
+  const real = S.outputs.filter(d => !d.is_virtual);
+  const dflt = real.find(d => d.is_default);
+  const used = new Map();     // endpoint id -> channel names, in channel order
+  for (const [id, label] of CH) {
+    const own = S.config.channels[id].device_id;
+    // a channel on the Windows default (or whose device is unplugged) plays on the default device
+    const dev = own && S.outputs.some(d => d.id === own) ? real.find(d => d.id === own) : dflt;
+    if (!dev) continue;
+    if (!used.has(dev.id)) used.set(dev.id, []);
+    used.get(dev.id).push(label);
+  }
+  const ordered = [...used.keys()].map(id => real.find(d => d.id === id)).concat(real.filter(d => !used.has(d.id)));
+  return ordered.map(d => ({ v: d.id, t: d.name + (used.has(d.id) ? ' — ' + used.get(d.id).join(', ') : '') }));
+}
+
+const eqNow = () => (eqDev && S.config.output_eq && S.config.output_eq[eqDev]) || EQ0;
+
+/** Sliders, readouts and the highlighted preset, from the in-memory settings of the selected device. */
+function paintEq() {
+  const cur = eqNow();
+  for (const [key, id] of OEQ) {
+    const e = $('#' + id);
+    if (!busy(e)) e.value = cur[key];
+    paint(e);
+    const txt = fmtDb(+e.value);
+    $('#' + id + '-v').textContent = txt;
+    e.setAttribute('aria-valuetext', txt);
+  }
+  for (const b of document.querySelectorAll('#eq-presets button')) {
+    const p = PRESETS[b.dataset.p];
+    b.setAttribute('aria-pressed', OEQ.every(([key]) => Math.abs((cur[key] || 0) - p[key]) < 0.05) ? 'true' : 'false');
+  }
+}
+
+/** The part after "}." of an endpoint id, lower case: what the service and the registry call the device. */
+const guidOf = id => { const i = (id || '').indexOf('}.'); return i < 0 ? '' : id.slice(i + 2).toLowerCase(); };
+let apoPending = false;       // a command for the Clarim service (install, switch, restart) is on its way
+
+function renderEq() {
+  const a = S.eq_apo || {};
+  const installed = !!a.installed;
+  const busyText = a.busy || '';
+  const viaService = a.writer === 'service';             // the Clarim service can install, attach and restart
+  const free = viaService && !busyText && !apoPending;   // ... and is not in the middle of something
+  $('#eq-busy').hidden = !busyText;
+  $('#eq-busy-t').textContent = busyText;
+  $('#eq-err').hidden = !a.error;
+  $('#eq-err-t').textContent = a.error || '';
+  // Equalizer APO is not there: the Clarim service installs it
+  $('#eq-setup').hidden = installed;
+  $('#eq-install').disabled = !free;
+  $('#eq-install').title = viaService ? '' : (a.error || 'O serviço do Clarim não está disponível.');
+  // attached, but Windows Audio has not restarted since: the change only counts after that
+  const needs = installed && !!a.needs_restart;
+  $('#eq-restart').hidden = !needs;
+  $('#eq-restart-btn').disabled = !free;
+  $('#eq-ctl').hidden = !installed;
+  if (!installed) return;
+  const nowriter = a.writer === 'none';                 // nobody can write the APO config: look, but do not touch
+  const devs = eqDevices();
+  if (!devs.some(o => o.v === eqDev)) eqDev = devs.length ? devs[0].v : '';
+  fillSelect($('#eq-dev'), devs.length ? devs : [{ v: '', t: 'Nenhum aparelho encontrado' }], eqDev);
+  $('#eq-dev').disabled = nowriter || !eqDev;
+  // What the service (or, without it, the registry) says about this device. Hints: say nothing when unknown.
+  const has = k => (a[k] || []).includes(eqDev);
+  const info = (a.devices || []).find(d => d.guid.toLowerCase() === guidOf(eqDev));
+  const on = has('active_devices');
+  const refused = !!info && !info.can_configure;
+  const sw = $('#eq-on');
+  sw.checked = on;
+  sw.disabled = !free || !eqDev || refused;
+  sw.title = viaService ? '' : 'Precisa do serviço do Clarim.';
+  // sliders and presets act on a device that has the equalizer on
+  const tone = !nowriter && !!eqDev && on;
+  for (const e of document.querySelectorAll('#eq-presets button, #o-b, #o-m, #o-t')) e.disabled = !tone;
+  paintEq();
+  let kind = '', txt = '';
+  if (eqDev && !nowriter) {
+    if (refused) { kind = 'warn'; txt = 'Este aparelho não aceita o equalizador (é virtual ou não está conectado).'; }
+    else if (has('enhancements_off')) { kind = 'warn'; txt = 'As melhorias de áudio do Windows estão desligadas neste aparelho; o equalizador não funciona assim. Ligue-as nas propriedades do aparelho, em Configurações do Windows > Sistema > Som.'; }
+    else if (on && needs) { kind = 'warn'; txt = 'Ligado neste aparelho. Só vale depois de reiniciar o áudio (aviso acima).'; }
+    else if (on) { kind = 'ok'; txt = 'Ativo neste aparelho'; }
+    else if (needs) { kind = 'warn'; txt = 'Desligado neste aparelho. Se estava ligado, ainda toca até reiniciar o áudio (aviso acima).'; }
+    else if (!viaService) txt = 'Para ligar o equalizador neste aparelho, o Clarim precisa do serviço instalado (clarim install).';
+    else if (!has('unknown_devices')) txt = 'Desligado neste aparelho. Ligue a chave acima para equalizar o que sai por ele.';
+  }
+  const st = $('#eq-st');
+  st.className = 'hint ' + kind;
+  st.hidden = !txt;
+  st.title = on && a.apo_loaded === true ? 'O Windows já carregou o Equalizer APO.' : '';
+  const glyph = kind === 'ok' ? '✓ ' : kind === 'warn' ? '⚠︎ ' : '';   // color is never the only signal
+  st.replaceChildren(...(txt ? [el('span', { class: 'g', 'aria-hidden': 'true', text: glyph }), txt] : []));
+  const dev = S.outputs.find(d => d.id === eqDev);
+  $('#eq-bt').hidden = !(dev && /bluetooth|\bBT/i.test(dev.name));
+}
+
+/** Sends a command for the Clarim service, then reads the state back: the agent looked at the service right after it. */
+function apoCommand(path, body) {
+  apoPending = true; renderEq();
+  return queue(() => api(path, body)).then(() => { apoPending = false; return pollState(true); });
+}
+$('#eq-install').addEventListener('click', () => apoCommand('/api/eq_apo/install', {}));
+$('#eq-restart-btn').addEventListener('click', () => apoCommand('/api/audio/restart', {}));
+$('#eq-on').addEventListener('change', e => {
+  const dev = eqDev, want = e.target.checked;
+  if (!dev) return;
+  const a = S.eq_apo, list = a.active_devices || (a.active_devices = []), i = list.indexOf(dev);
+  if (want && i < 0) list.push(dev); else if (!want && i >= 0) list.splice(i, 1);   // show it at once; the next state confirms
+  apoCommand('/api/eq_apo/device', { device_id: dev, enabled: want });
+});
+
+function setEq(patch) {
+  const dev = eqDev;
+  if (!dev) return;
+  const all = S.config.output_eq || (S.config.output_eq = {});
+  all[dev] = { ...EQ0, ...all[dev], ...patch };
+  eqDirty[dev] = true; stamp();
+}
+$('#eq-dev').addEventListener('change', e => { eqDev = e.target.value; renderEq(); });
+for (const [key, id] of OEQ) {
+  const e = $('#' + id);
+  e.addEventListener('input', () => { const dev = eqDev; setEq({ [key]: +e.value }); paintEq(); later('eq-' + dev, () => sendEq(dev), 200); });
+  e.addEventListener('change', () => { const dev = eqDev; now('eq-' + dev, () => sendEq(dev)); });
+}
+document.querySelectorAll('#eq-presets button').forEach(b => b.addEventListener('click', () => {
+  const dev = eqDev; setEq(PRESETS[b.dataset.p]); paintEq(); now('eq-' + dev, () => sendEq(dev));
+}));
+
+// ---------------------------------------------------------------- render + meters
+const SONAR_ON = 'SteelSeries Sonar detectado: se o GG/Sonar estiver aberto, os dois brigam pela saída de cada app. Feche o GG/Sonar ou desligue o Roteamento por app.';
+const SONAR_OFF = 'O SteelSeries Sonar está instalado: feche o GG/Sonar antes de ligar o Roteamento por app.';
+/** Sonar banner (warning while routing is on, hint while it is off) and the generic "routing off" note. */
+function renderRouting() {
+  const on = S.config.routing_enabled;
+  const sonar = S.outputs.some(d => /sonar/i.test(d.name));
+  const b = $('#sonar');
+  b.hidden = !sonar;
+  if (sonar) {
+    b.className = 'banner ' + (on ? 'warn' : 'info');
+    $('#sonar-g').textContent = on ? '⚠︎' : 'ℹ︎';
+    $('#sonar-t').textContent = on ? SONAR_ON : SONAR_OFF;
+  }
+  $('#routing-note').hidden = on;   // the Sonar hint gives no reason for "off" (it may be the user's choice or --no-routing)
+}
+
+function render() {
+  $('main').inert = false; $('#routing').disabled = false; $('#refresh').disabled = false;
+  $('#routing').checked = S.config.routing_enabled;
+  renderRouting();
+  renderMic();
+  renderChannels();
+  renderEq();
+  kickMeters();
+}
+$('#routing').addEventListener('change', e => {
+  S.config.routing_enabled = e.target.checked;
+  renderRouting();
+  renderChannels();   // the "não roteado" tags depend on it
+  queue(() => api('/api/routing', { enabled: e.target.checked }));
+});
+$('#refresh').addEventListener('click', () => {
+  const b = $('#refresh'); b.classList.remove('spin'); void b.offsetWidth; b.classList.add('spin');
+  queue(() => api('/api/refresh', {})).then(ok => ok && pollState(true)).then(() => { if (!$('#conn').hidden) return; toast('Dispositivos e apps atualizados.'); });
+});
+
+const mIn = new Meter($('#mt-in'), $('#db-in'));
+const mOut = new Meter($('#mt-out'), $('#db-out'));
+let micKey = '';
+
+// A running mic whose input level stays at exactly 0 for 5 s is almost always muted or blocked by Windows privacy.
+const SILENT_AFTER_MS = 5000;
+let silentSince = 0, lastSample = 0;
+function trackSilence(st) {
+  const t = performance.now();
+  if (t - lastSample > 1000) silentSince = 0;   // a gap (hidden window, stalled poll) restarts the count
+  lastSample = t;
+  if (st.running && st.in_peak === 0) { if (!silentSince) silentSince = t; } else silentSince = 0;
+  // one banner for both signals: the engine's own note (Windows sent only silence, ~2 s) or our 5 s of exact zeros
+  $('#silent').hidden = !(isSilentNote(st.error) || (silentSince && t - silentSince >= SILENT_AFTER_MS));
+}
+
+// Calibration outcomes ride in `mic.error`: show each one once, as a toast.
+let lastNote = '', noteAt = -1e9;
+function trackNote(st) {
+  const note = isNote(st.error) ? st.error : '';
+  if (note && note !== lastNote) { noteAt = performance.now(); toast(note, 'err'); }
+  lastNote = note;
+}
+
+function applyMeters(m) {
+  const st = m.mic;
+  S.mic = st;
+  mIn.set(st.in_peak); mOut.set(st.out_peak);
+  trackSilence(st); trackNote(st);
+  const on = st.running && st.vad > 0.5;
+  $('#vad').classList.toggle('on', on);
+  $('#vad-t').textContent = on ? 'Voz detectada' : 'Sem voz';
+  const key = [st.running, st.error, st.focus_open, st.denoise_active, st.dsp_us >> 5, Math.round(st.latency_ms)].join('|');
+  if (key !== micKey) { micKey = key; renderMicStatus(); }
+  trackCalibration(st);
+  const peaks = new Map(m.sessions);
+  for (const r of rows.values()) {
+    let p = 0;
+    for (const pid of r.pids) p = Math.max(p, peaks.get(pid) || 0);
+    r.pk.style.transform = 'scaleX(' + (pct60(toDb(p)) / 100) + ')';
+  }
+}
+
+buildChannels();
+})();
+</script>
+</body>
+</html>
