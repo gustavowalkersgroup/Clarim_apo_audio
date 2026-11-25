@@ -1,6 +1,6 @@
-//! Dynamics and level blocks: gain, gate, compressor, limiter.
+//! Dynamics and level blocks: gain, gate, limiter (the voice AGC lives in `agc.rs`).
 
-use super::{db_to_lin, lin_to_db, onepole_coef, Block, SAMPLE_RATE};
+use super::{db_to_lin, onepole_coef, Block, SAMPLE_RATE};
 
 /// Smoothed gain.
 pub struct Gain {
@@ -94,53 +94,6 @@ impl Block for NoiseGate {
     }
 }
 
-/// Feed-forward compressor with program-style envelope in dB domain.
-pub struct Compressor {
-    threshold_db: f32,
-    ratio: f32,
-    attack: f32,
-    release: f32,
-    makeup: f32,
-    env_db: f32,
-}
-
-impl Compressor {
-    pub fn new(threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32, makeup_db: f32) -> Self {
-        Self {
-            threshold_db,
-            ratio: ratio.max(1.0),
-            attack: onepole_coef(attack_ms),
-            release: onepole_coef(release_ms),
-            makeup: db_to_lin(makeup_db),
-            env_db: -90.0,
-        }
-    }
-}
-
-impl Block for Compressor {
-    fn process(&mut self, buf: &mut [f32]) {
-        for s in buf.iter_mut() {
-            let level_db = lin_to_db(s.abs());
-            let coef = if level_db > self.env_db {
-                self.attack
-            } else {
-                self.release
-            };
-            self.env_db = level_db + (self.env_db - level_db) * coef;
-            let over = self.env_db - self.threshold_db;
-            // below the threshold (most samples of a quiet mic) only the makeup applies: no powf
-            *s *= if over > 0.0 {
-                db_to_lin(over * (1.0 / self.ratio - 1.0)) * self.makeup
-            } else {
-                self.makeup
-            };
-        }
-    }
-    fn reset(&mut self) {
-        self.env_db = -90.0;
-    }
-}
-
 /// Hard safety limiter (fast peak follower driving gain reduction).
 pub struct Limiter {
     ceiling: f32,
@@ -208,17 +161,5 @@ mod tests {
         let mut buf = dry.clone();
         lim.process(&mut buf);
         assert_eq!(buf, dry);
-    }
-
-    #[test]
-    fn compressor_applies_makeup_below_threshold_and_compresses_above() {
-        let mut c = Compressor::new(-24.0, 3.0, 10.0, 200.0, 6.0);
-        let mut quiet = vec![0.001f32; 4800]; // -60 dBFS DC: far below threshold
-        c.process(&mut quiet);
-        assert!((quiet[4799] / 0.001 - db_to_lin(6.0)).abs() < 1e-3);
-        let mut loud = vec![0.5f32; 48_000]; // -6 dBFS: 18 dB over -> 12 dB reduction, +6 makeup = -6 dB
-        c.process(&mut loud);
-        let g = loud[47_999] / 0.5;
-        assert!((g - db_to_lin(-6.0)).abs() < 0.01, "gain {g}");
     }
 }

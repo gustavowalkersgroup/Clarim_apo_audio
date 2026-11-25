@@ -17,11 +17,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use clarim_core::{AppSession, ChannelId, ChannelSettings};
+use clarim_core::{AppSession, CaptureSession, ChannelId, ChannelSettings};
 use windows::Win32::Media::Audio::{IMMDeviceEnumerator, ISimpleAudioVolume};
 
 use policy::{Policy, ROLE_COMMUNICATIONS, ROLE_MULTIMEDIA};
-use sessions::{ComGuard, Scan, SessionInfo};
+use sessions::{CaptureInfo, ComGuard, Scan, SessionInfo};
 
 pub use sessions::UNKNOWN_EXE;
 
@@ -288,6 +288,8 @@ fn app_sessions<'a>(
 struct Shared {
     sessions: Vec<AppSession>,
     peaks: Vec<(u32, f32)>,
+    /// Every app capture session of the last scan (all endpoints, any state). Empty when that scan failed.
+    captures: Vec<CaptureSession>,
 }
 
 fn lock(shared: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
@@ -373,6 +375,13 @@ impl RoutingEngine {
     pub fn peaks(&self) -> Vec<(u32, f32)> {
         self.poll.touch();
         lock(&self.shared).peaks.clone()
+    }
+
+    /// Every app capture (microphone) session of the last scan, same age as `sessions`. Empty while Windows
+    /// Audio does not answer. Does NOT count as the dashboard polling: the call watcher asks every second
+    /// and must not keep the 10 Hz meters awake.
+    pub fn captures(&self) -> Vec<CaptureSession> {
+        lock(&self.shared).captures.clone()
     }
 
     /// Stops the worker and waits for it (same as dropping the engine).
@@ -576,6 +585,8 @@ impl Worker {
             Ok(s) => s,
             Err(e) => {
                 log::debug!("routing: enumeration failed: {e}");
+                // Stale captures would keep a call alive while Windows Audio is down.
+                lock(&self.shared).captures.clear();
                 return ScanOutcome { wrote_routes: false, healthy: false };
             }
         };
@@ -583,13 +594,16 @@ impl Worker {
         self.policy_errors = 0;
         let endpoints = scan.endpoints.len();
         let now = Instant::now();
+        // Always listed (the call watcher reads them whatever `call_to_chat` says); promotion keeps its gating.
+        let caps = capture_list(en, self.own_pid, &mut self.exes);
         let render_pids: HashSet<u32> = scan.sessions.iter().map(|s| s.info.pid).collect();
         let mut exe_pids = render_pids.clone();
+        // Capture pids keep their exe cache entry too, or it would be re-resolved every scan.
         if self.cfg.call_to_chat {
-            // Capture pids keep their exe cache entry too, or it would be re-resolved every scan.
-            exe_pids.extend(note_captures(en, self.own_pid, &mut self.exes, &mut self.captures, now));
+            exe_pids.extend(note_captures(&caps, &mut self.captures, now));
         } else {
             self.captures.clear();
+            exe_pids.extend(caps.iter().map(|c| c.pid));
         }
         let mut wrote_routes = false;
         if self.cfg.enabled {
@@ -605,8 +619,15 @@ impl Worker {
         self.exes.retain(|pid, _| exe_pids.contains(pid));
         self.applied.retain(|k, _| keys.contains(k.as_str()));
 
-        lock(&self.shared).sessions =
-            app_sessions(scan.sessions.iter().map(|s| &s.info), &self.cfg, &self.captures, now);
+        let apps = app_sessions(scan.sessions.iter().map(|s| &s.info), &self.cfg, &self.captures, now);
+        {
+            let mut g = lock(&self.shared);
+            g.sessions = apps;
+            g.captures = caps
+                .into_iter()
+                .map(|c| CaptureSession { pid: c.pid, exe: c.exe, device_id: c.device_id, active: c.active })
+                .collect();
+        }
         self.live = scan.sessions;
         ScanOutcome { wrote_routes, healthy: scan_healthy(true, endpoints, self.policy_calls, self.policy_errors) }
     }
@@ -718,26 +739,24 @@ impl Worker {
     }
 }
 
-/// Records `now` for every exe that has an active microphone session and drops entries older than
+/// Every app capture session on every active capture endpoint. A failure is logged at debug level and
+/// gives an empty list.
+fn capture_list(en: &IMMDeviceEnumerator, own_pid: u32, exes: &mut HashMap<u32, String>) -> Vec<CaptureInfo> {
+    sessions::enumerate_capture(en, own_pid, exes).unwrap_or_else(|e| {
+        log::debug!("routing: capture enumeration failed: {e}");
+        Vec::new()
+    })
+}
+
+/// Records `now` for every exe that has an active microphone session in `list` and drops entries older than
 /// [`CALL_HANGOVER`]. Returns every capture pid seen (any state), for the exe cache.
-fn note_captures(
-    en: &IMMDeviceEnumerator,
-    own_pid: u32,
-    exes: &mut HashMap<u32, String>,
-    captures: &mut Captures,
-    now: Instant,
-) -> HashSet<u32> {
+fn note_captures(list: &[CaptureInfo], captures: &mut Captures, now: Instant) -> HashSet<u32> {
     let mut pids = HashSet::new();
-    match sessions::enumerate_capture(en, own_pid, exes) {
-        Ok(list) => {
-            for c in list {
-                pids.insert(c.pid);
-                if c.active && c.exe != UNKNOWN_EXE && captures.insert(c.exe.clone(), now).is_none() {
-                    log::debug!("routing: microphone in use by {} (pid {}) on {}", c.exe, c.pid, c.device_id);
-                }
-            }
+    for c in list {
+        pids.insert(c.pid);
+        if c.active && c.exe != UNKNOWN_EXE && captures.insert(c.exe.clone(), now).is_none() {
+            log::debug!("routing: microphone in use by {} (pid {}) on {}", c.exe, c.pid, c.device_id);
         }
-        Err(e) => log::debug!("routing: capture enumeration failed: {e}"),
     }
     captures.retain(|_, t| now.saturating_duration_since(*t) < CALL_HANGOVER);
     pids
@@ -755,7 +774,7 @@ pub fn list_sessions_once(cfg: &RoutingConfig) -> Result<Vec<AppSession>> {
     let now = Instant::now();
     let mut captures = Captures::new();
     if cfg.call_to_chat {
-        note_captures(&en, own_pid, &mut exes, &mut captures, now);
+        note_captures(&capture_list(&en, own_pid, &mut exes), &mut captures, now);
     }
     Ok(app_sessions(scan.sessions.iter().map(|s| &s.info), cfg, &captures, now))
 }
@@ -1131,6 +1150,46 @@ mod tests {
         assert!(p.recent(), "a fresh engine counts as watched for the first seconds");
         p.touch();
         assert!(p.recent());
+    }
+
+    fn capture(pid: u32, exe: &str, active: bool) -> CaptureInfo {
+        CaptureInfo { pid, exe: exe.to_owned(), device_id: "mic".to_owned(), active }
+    }
+
+    #[test]
+    fn note_captures_records_active_known_exes_and_lets_them_expire() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let list = [capture(1, "discord.exe", true), capture(2, "chrome.exe", false), capture(3, UNKNOWN_EXE, true)];
+        let mut caps = Captures::new();
+        let pids = note_captures(&list, &mut caps, t0);
+        assert_eq!(pids, HashSet::from([1, 2, 3]), "every capture pid is kept for the exe cache, any state");
+        let exes: Vec<&str> = caps.keys().map(String::as_str).collect();
+        assert_eq!(exes, ["discord.exe"], "only an active, resolved exe counts as a call");
+        // nothing new later: it stays through the hangover and is gone at 20 s
+        note_captures(&[], &mut caps, at(19));
+        assert_eq!(caps.len(), 1, "19 s after the last capture it is still in the hangover");
+        note_captures(&[], &mut caps, at(20));
+        assert!(caps.is_empty(), "20 s after the last capture it expired: {caps:?}");
+    }
+
+    #[test]
+    fn captures_accessor_returns_the_published_list_without_marking_the_dashboard_as_polling() {
+        let published =
+            vec![CaptureSession { pid: 7, exe: "discord.exe".into(), device_id: "cable".into(), active: true }];
+        let shared = Arc::new(Mutex::new(Shared { captures: published.clone(), ..Shared::default() }));
+        let poll = Arc::new(Poll::new());
+        const STAMP: u64 = 12_345;
+        poll.last_polled.store(STAMP, Ordering::Relaxed);
+        let (tx, _rx) = mpsc::channel();
+        let eng = RoutingEngine { tx, shared, poll: Arc::clone(&poll), worker: None };
+        assert_eq!(eng.captures(), published);
+        let after = poll.last_polled.load(Ordering::Relaxed);
+        assert_eq!(after, STAMP, "captures() touched the poll stamp: {STAMP} -> {after}");
+        // control: peaks() does touch, so the check above can fail
+        eng.peaks();
+        let touched = poll.last_polled.load(Ordering::Relaxed);
+        assert_ne!(touched, STAMP, "peaks() must move the stamp, or this test proves nothing");
     }
 
     #[test]

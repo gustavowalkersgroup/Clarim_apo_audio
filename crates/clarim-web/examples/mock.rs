@@ -6,7 +6,12 @@
 //! `--error`     : mic engine reports an error
 //! `--no-routing`: per-app routing switched off at start
 //! `--sonar`     : SteelSeries Sonar endpoints exist (and Sonar Gaming is the Windows default)
-//! `--in-call`   : Chrome is using a microphone: it shows in Chat with the "em chamada" tag
+//! `--in-call`   : Chrome is using the virtual mic: it shows in Chat with the "em chamada" tag, the mic card says "Em chamada: Chrome"
+//!                 and Avançado shows the "Vazamento" debug line (the four flags below imply it)
+//! `--leak-echo` : in a call, the speakers' sound leaks into the mic (yellow "Tem som das caixas vazando" banner; echo 0,7 at 250 ms)
+//! `--leak-noise`: in a call, background noise passes the filter (yellow "Tem ruído de fundo" banner; noise about -44 dBFS)
+//! `--too-quiet` : in a call, the voice stays low with the automatic volume at its maximum (the "Sua voz está chegando baixa" hint)
+//! `--mic-vol-note`: the note about the Windows mic volume (blue banner, as after "Baixei o volume do microfone")
 //! `--silent-mic`: the mic runs but its input level is exactly 0 (the engine's "Microfone silenciado" note, one yellow "Sem sinal" banner, chip stays green)
 //! `--monitor-note`: the engine reports that "Ouvir meu microfone" cannot play (yellow banner under Fones, chip stays green)
 //! `--unrouted`  : Discord ignores its channel's output (the "não roteado" tag)
@@ -100,6 +105,10 @@ struct Mock {
     error: bool,
     sonar: bool,
     in_call: bool,
+    leak_echo: bool,
+    leak_noise: bool,
+    mic_vol_note: bool,
+    too_quiet: bool,
     silent_mic: bool,
     unrouted: bool,
     note: bool,
@@ -337,6 +346,25 @@ impl Mock {
             d => Some(d),
         };
         let in_peak = if !running || self.silent_mic { 0.0 } else { (env * gain + 0.02).min(1.0) };
+        // Engine readings. The AGC learns the speech level even with auto_level off, but only from a running mic with sound.
+        let wobble = (t * 1.3).sin();
+        let voice_base = if self.too_quiet { -50.0 } else { -29.0 };
+        let input_voice_db = (running && !self.silent_mic).then_some(voice_base + c.input_gain_db);
+        let agc_gain_db = match input_voice_db {
+            Some(v) if c.auto_level => (-23.0 - v + 0.3 * wobble).clamp(-12.0, 20.0),
+            _ => 0.0,
+        };
+        let voice_db = input_voice_db.map(|v| v + agc_gain_db + c.output_gain_db);
+        // Backend overlay. With "Avisar se vazar" off there are no references and no alert; the volume guard needs auto_level.
+        let alert = self.in_call && c.leak_warnings;
+        let refs = alert && running;
+        let guard = self.in_call && running && c.auto_level && c.auto_mic_volume;
+        let (echo_score, echo_db, echo_lag_ms) = match (refs, self.leak_echo) {
+            (false, _) => (0.0, None, 0.0),
+            (true, true) => (0.72 + 0.1 * wobble, Some(-46.0), 250.0),
+            (true, false) => (0.05 + 0.03 * wobble.abs(), Some(-72.0), 190.0),
+        };
+        let noise_base = if self.leak_noise { -44.0 } else { -63.0 };
         MicStatus {
             running,
             error: if self.note {
@@ -360,6 +388,24 @@ impl Mock {
             latency_ms: 34.0,
             calibrating: cal.is_some(),
             calibration_progress: cal.unwrap_or(0.0),
+            agc_gain_db,
+            input_voice_db,
+            voice_db,
+            echo_score,
+            echo_db,
+            echo_lag_ms,
+            noise_db: running.then_some(noise_base + 1.5 * wobble),
+            clip_events: 0,
+            references: u32::from(refs),
+            in_call: self.in_call,
+            call_apps: if self.in_call { vec!["chrome.exe".into()] } else { Vec::new() },
+            leak: match (alert, self.leak_echo, self.leak_noise) {
+                (true, true, _) => Some(LeakKind::Echo),
+                (true, false, true) => Some(LeakKind::Noise),
+                _ => None,
+            },
+            mic_volume_note: self.mic_vol_note.then(|| "Baixei o volume do microfone no Windows em 3 dB porque estava estourando.".to_string()),
+            mic_too_quiet: guard && self.too_quiet,
         }
     }
 
@@ -536,13 +582,18 @@ fn main() -> Result<()> {
         error: (apo == Apo::InstallError)
             .then(|| "Não foi possível baixar o Equalizer APO. Confira a conexão com a internet e tente de novo.".to_string()),
     };
+    let (leak_echo, leak_noise, too_quiet) = (flag("--leak-echo"), flag("--leak-noise"), flag("--too-quiet"));
     let mock = Mock {
         start: Instant::now(),
         cfg: Mutex::new(cfg),
         no_vmic: flag("--no-vmic"),
         error: flag("--error"),
         sonar: flag("--sonar"),
-        in_call: flag("--in-call"),
+        in_call: flag("--in-call") || leak_echo || leak_noise || too_quiet,
+        leak_echo,
+        leak_noise,
+        mic_vol_note: flag("--mic-vol-note"),
+        too_quiet,
         silent_mic: flag("--silent-mic"),
         unrouted: flag("--unrouted"),
         note: flag("--note"),

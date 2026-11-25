@@ -1,7 +1,7 @@
 //! The mic DSP chain, shared by the live pipeline and `selftest`, one 10 ms frame at a time:
 //! input gain -> HPF 80 Hz -> denoise (off / RNNoise / DeepFilterNet3) -> Voice Focus -> noise gate
-//! -> EQ preset -> tone sliders -> auto level -> output gain -> limiter -1 dBFS (-> final clamp). The output gain sits
-//! BEFORE the limiter so that a boost can never push the signal past the -1 dBFS ceiling.
+//! -> EQ preset -> tone sliders -> voice AGC (auto level) -> output gain -> limiter -1 dBFS (-> final clamp). The
+//! output gain sits BEFORE the limiter so that a boost can never push the signal past the -1 dBFS ceiling.
 //!
 //! Speech probability (for Voice Focus, the dashboard dot and calibration) always comes from one RNNoise
 //! instance that sees the gain + HPF signal every frame. In `light` mode that same instance is the
@@ -9,7 +9,8 @@
 //! VAD is used); in `off` mode too. DFN's own lsnr is not used: one cheap 0..1 probability that behaves
 //! the same in every mode is simpler than mapping lsnr dB to a probability, and RNNoise costs ~70 us.
 
-use crate::dsp::basic::{Compressor, Gain, Limiter, NoiseGate};
+use crate::dsp::agc::Agc;
+use crate::dsp::basic::{Gain, Limiter, NoiseGate};
 use crate::dsp::denoise::Denoise;
 use crate::dsp::eq::{Biquad, PresetEq, ToneEq};
 use crate::dsp::focus::VoiceFocus;
@@ -90,6 +91,12 @@ pub struct FrameInfo {
     pub post_denoise_ms: f32,
     /// Voice Focus is passing audio because of speech (false when Voice Focus is off).
     pub focus_open: bool,
+    /// Current AGC gain in dB (0 when auto level is off).
+    pub agc_gain_db: f32,
+    /// Speech level at the AGC input (dBFS, dB mean of 10 ms frame RMS); `None` until the AGC is confident.
+    pub input_voice_db: Option<f32>,
+    /// Speech level at the output: `input_voice_db` + AGC gain + output gain.
+    pub voice_db: Option<f32>,
 }
 
 pub struct MicChain {
@@ -107,7 +114,7 @@ pub struct MicChain {
     gate: NoiseGate,
     eq: PresetEq,
     tone: ToneEq,
-    comp: Compressor,
+    agc: Agc,
     limiter: Limiter,
     output_gain: Gain,
 }
@@ -130,7 +137,7 @@ impl MicChain {
             gate: NoiseGate::new(p.gate_threshold_db, 1.0, 120.0, 80.0),
             eq: PresetEq::new(p.eq),
             tone: ToneEq::new(p.tone_db),
-            comp: Compressor::new(-24.0, 3.0, 10.0, 200.0, 6.0),
+            agc: Agc::new(),
             limiter: Limiter::new(-1.0),
             output_gain: Gain::new(p.output_gain_db),
         };
@@ -142,6 +149,9 @@ impl MicChain {
     /// the DFN model right here (~0.5 s stall of this thread, once); starting in `strong` avoids it.
     pub fn set_params(&mut self, p: &DspParams) {
         let old = std::mem::replace(&mut self.p, *p);
+        if p.input_gain_db != old.input_gain_db {
+            self.agc.shift_db(p.input_gain_db - old.input_gain_db); // the AGC input moves by the same dB
+        }
         self.input_gain.set_db(p.input_gain_db);
         self.output_gain.set_db(p.output_gain_db);
         self.rnn.set_strength(p.denoise_strength);
@@ -158,6 +168,11 @@ impl MicChain {
         if p.denoise != old.denoise {
             self.select_denoise();
         }
+    }
+
+    /// The mic's level just changed by `db` outside the chain (the Windows mic volume): the AGC follows.
+    pub fn shift_input_db(&mut self, db: f32) {
+        self.agc.shift_db(db);
     }
 
     /// The denoiser that is really running.
@@ -262,22 +277,32 @@ impl MicChain {
             self.eq.process(buf);
         }
         self.tone.process(buf); // bypasses itself while all three sliders are 0
-        if p.auto_level {
-            self.comp.process(buf);
-        }
+        // Always called: it keeps learning the voice level and ramps back to unity when auto level is off.
+        self.agc.process(buf, vad, post_denoise_ms, p.output_gain_db, p.auto_level);
         self.output_gain.process(buf);
         self.limiter.process(buf);
         for s in buf.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
         }
-        FrameInfo { vad, post_denoise_ms, focus_open }
+        let agc_gain_db = self.agc.gain_db();
+        let input_voice_db = self.agc.input_voice_db();
+        FrameInfo {
+            vad,
+            post_denoise_ms,
+            focus_open,
+            agc_gain_db,
+            input_voice_db,
+            voice_db: input_voice_db.map(|v| v + agc_gain_db + p.output_gain_db),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calib::SPEECH_VAD;
     use crate::dsp::{Noise, SAMPLE_RATE};
+    use crate::selftest::Voice;
     use std::f32::consts::TAU;
 
     /// Everything off, 0 dB gains.
@@ -417,6 +442,64 @@ mod tests {
             chain.process(&mut buf);
             assert!(buf.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
         }
+    }
+
+    #[test]
+    fn agc_learns_the_voice_through_rnnoise_and_follows_input_changes() {
+        let p = DspParams { denoise: DenoiseMode::Light, auto_level: true, ..passthrough() };
+        let mut chain = MicChain::new(&p);
+        let (mut voice, mut noise) = (Voice::new(), Noise::new(0x5EED));
+        // the selftest signal: 0.6 s of voice, 0.9 s of silence, over -35 dBFS noise
+        let (mut speech_frames, mut speech_vad, mut run, mut best_run) = (0, 0, 0, 0);
+        let mut known = None;
+        for i in 0..1500 {
+            let speech = i % 150 < 60;
+            let mut buf: Vec<f32> = (0..FRAME)
+                .map(|_| {
+                    let v = voice.sample();
+                    (if speech { v } else { 0.0 }) + noise.sample() * 0.03
+                })
+                .collect();
+            let info = chain.process(&mut buf);
+            if speech {
+                speech_frames += 1;
+                if info.vad >= SPEECH_VAD {
+                    (speech_vad, run) = (speech_vad + 1, run + 1);
+                    best_run = best_run.max(run);
+                } else {
+                    run = 0;
+                }
+            }
+            if info.voice_db.is_some() {
+                known = Some(info);
+                break;
+            }
+        }
+        let info = known.unwrap_or_else(|| {
+            panic!("no voice level in 1500 frames: vad >= {SPEECH_VAD} on {speech_vad} of {speech_frames} speech frames, longest run {best_run}")
+        });
+        assert_eq!(
+            info.voice_db,
+            Some(info.input_voice_db.unwrap() + info.agc_gain_db),
+            "voice_db = input + AGC gain + 0 dB output gain"
+        );
+
+        // A known change of the input moves the learned level at once. Silence first, so the detector's
+        // speech tail is over and no frame teaches the estimate anything during the check.
+        let mut quiet = |chain: &mut MicChain| {
+            let mut buf: Vec<f32> = (0..FRAME).map(|_| noise.sample() * 0.03).collect();
+            chain.process(&mut buf).input_voice_db.unwrap()
+        };
+        let mut input = 0.0;
+        for _ in 0..30 {
+            input = quiet(&mut chain);
+        }
+        chain.set_params(&DspParams { input_gain_db: 6.0, ..p });
+        let up = quiet(&mut chain);
+        assert!((up - (input + 6.0)).abs() < 0.01, "input gain +6 dB moved the level {input:.2} -> {up:.2}");
+        chain.shift_input_db(-4.0);
+        let down = quiet(&mut chain);
+        assert!((down - (up - 4.0)).abs() < 0.01, "shift_input_db(-4) moved the level {up:.2} -> {down:.2}");
     }
 
     #[test]

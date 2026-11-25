@@ -5,9 +5,11 @@ use crate::calib::CalibShared;
 use crate::chain::DspParams;
 use crate::devices::{self, Flow};
 use crate::pipeline::{self, lock, Counters, EngineCmd, EngineConfig, EngineHandle};
+use crate::refs::{Loopbacks, RefSlots};
 use clarim_core::{DeviceInfo, MicSettings, MicStatus};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use wasapi::{Direction, Role};
 
 pub const NO_VIRTUAL_MIC: &str = "Nenhum microfone virtual encontrado — instale o VB-Cable (https://vb-audio.com/Cable/)";
 const CALIBRATION_FAILED: &str = "Calibração falhou: fale mais alto/perto do microfone";
@@ -20,6 +22,10 @@ const MONITOR_DOWN: &str = "Ouvir meu microfone indisponível: a saída escolhid
 const NOTE_TTL: Duration = Duration::from_secs(10);
 /// How often `status()` writes the stream health line to the log.
 const STATS_EVERY: Duration = Duration::from_secs(10);
+/// How long stopping the loopback streams may wait for their threads: at quit, and when the mic is switched
+/// off (that one runs under the backend's mic lock, so it waits less). They normally exit within ~30 ms.
+const LOOPBACK_QUIT_WAIT: Duration = Duration::from_millis(300);
+const LOOPBACK_OFF_WAIT: Duration = Duration::from_millis(100);
 
 struct Resolved {
     input: DeviceInfo,
@@ -41,11 +47,16 @@ pub struct MicEngine {
     note: Mutex<Option<(Instant, &'static str)>>,
     /// When `status()` last logged the stream counters, and what they were then.
     stats_logged: Mutex<(Instant, Counters)>,
+    /// Speaker references: the slots every pipeline of this engine reads, and the loopback streams that
+    /// fill them. The streams belong to the engine, not to a pipeline: a mic restart leaves them running.
+    refs: Arc<RefSlots>,
+    loopbacks: Loopbacks,
 }
 
 impl MicEngine {
     /// Idle: no streams are opened until `apply` enables the mic.
     pub fn new(deny: Vec<String>) -> Self {
+        let refs = Arc::new(RefSlots::new());
         Self {
             deny,
             handle: None,
@@ -55,6 +66,8 @@ impl MicEngine {
             calib: Arc::new(CalibShared::new()),
             note: Mutex::new(None),
             stats_logged: Mutex::new((Instant::now(), Counters::default())),
+            loopbacks: Loopbacks::new(refs.clone()),
+            refs,
         }
     }
 
@@ -63,6 +76,7 @@ impl MicEngine {
     pub fn apply(&mut self, s: &MicSettings) {
         if !s.enabled {
             self.shutdown();
+            self.loopbacks.stop_all(LOOPBACK_OFF_WAIT);
             self.applied = Some(s.clone());
             return;
         }
@@ -102,6 +116,7 @@ impl MicEngine {
                     monitor_id: r.monitor.as_ref().map(|m| m.id.clone()),
                     params: DspParams::from_settings(s),
                     calib: self.calib.clone(),
+                    refs: self.refs.clone(),
                 };
                 self.resolved = Some(r);
                 match pipeline::start(cfg) {
@@ -128,6 +143,7 @@ impl MicEngine {
             calibration_progress: self.calib.progress(),
             input_name: self.resolved.as_ref().map(|r| r.input.name.clone()),
             output_name: self.resolved.as_ref().map(|r| r.output.name.clone()),
+            references: self.loopbacks.running(),
             ..MicStatus::default()
         };
         if self.calib.take_failed() {
@@ -146,6 +162,14 @@ impl MicEngine {
                 st.focus_open = m.focus_open();
                 st.dsp_us = m.dsp_us();
                 st.latency_ms = m.latency_ms();
+                st.agc_gain_db = m.agc_gain_db();
+                st.input_voice_db = m.input_voice_db();
+                st.voice_db = m.voice_db();
+                st.echo_score = m.echo_score();
+                st.echo_db = m.echo_db();
+                st.echo_lag_ms = m.echo_lag_ms();
+                st.noise_db = m.noise_db();
+                st.clip_events = m.clip_frames();
                 if error.is_none() && m.mic_silent() {
                     error = Some(MIC_SILENT.to_string());
                 }
@@ -210,7 +234,43 @@ impl MicEngine {
 
     pub fn stop(&mut self) {
         self.shutdown();
+        self.loopbacks.stop_all(LOOPBACK_QUIT_WAIT);
         self.applied = None;
+    }
+
+    /// Make exactly these render endpoints (at most `MAX_REFS`) the speaker references of the echo
+    /// detector. Idempotent and cheap: call it every housekeeping tick. Never joins a thread, so it is safe
+    /// under the caller's lock. Ignored while the mic is disabled (the streams were stopped with it).
+    pub fn set_references(&mut self, ids: &[String]) {
+        if self.applied.as_ref().is_some_and(|a| a.enabled) {
+            self.loopbacks.set(ids);
+        }
+    }
+
+    /// The mic's level just changed by `db` outside the chain (the Windows mic volume): the voice AGC moves
+    /// its learned level by the same amount. False when no pipeline runs or its command queue is full.
+    pub fn shift_mic_volume(&self, db: f32) -> bool {
+        db.is_finite() && self.handle.as_ref().is_some_and(|h| h.send(EngineCmd::MicVolumeShift(db)))
+    }
+
+    /// Endpoint id of the real mic in use (`None` unless the pipeline is running).
+    pub fn input_device_id(&self) -> Option<String> {
+        self.running_devices().map(|r| r.input.id.clone())
+    }
+
+    /// Endpoint id of the virtual mic's render side in use (`None` unless the pipeline is running).
+    pub fn output_device_id(&self) -> Option<String> {
+        self.running_devices().map(|r| r.output.id.clone())
+    }
+
+    /// Endpoint id "Ouvir meu microfone" plays on: the RESOLVED device (the Windows default output when no
+    /// device was chosen). `None` while monitoring is off or the pipeline is not running.
+    pub fn monitor_device_id(&self) -> Option<String> {
+        self.running_devices().and_then(|r| r.monitor.as_ref()).map(|m| m.id.clone())
+    }
+
+    fn running_devices(&self) -> Option<&Resolved> {
+        self.handle.as_ref().filter(|h| h.is_running()).and(self.resolved.as_ref())
     }
 
     fn shutdown(&mut self) {
@@ -323,6 +383,20 @@ fn is_cable_partner(input: &DeviceInfo, output: &DeviceInfo) -> bool {
     input.is_virtual && output.is_virtual && device_group(&input.name) == device_group(&output.name)
 }
 
+/// The capture endpoint that calls read as the virtual mic: the virtual input that shares its description
+/// ("VB-Audio Virtual Cable") with the render endpoint `output_name` that Clarim writes into.
+pub fn virtual_mic_capture<'a>(inputs: &'a [DeviceInfo], output_name: &str) -> Option<&'a DeviceInfo> {
+    let group = device_group(output_name);
+    inputs.iter().find(|d| d.is_virtual && device_group(&d.name) == group)
+}
+
+/// Id of the Windows default output for the Communications role (`comms`) or the Console role, which is
+/// what apps without a choice of their own play on. The calling thread needs COM (`init_com`).
+pub fn default_render_id(comms: bool) -> Option<String> {
+    let role = if comms { Role::Communications } else { Role::Console };
+    wasapi::get_default_device_for_role(&Direction::Render, &role).ok()?.get_id().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,11 +499,33 @@ mod tests {
     }
 
     #[test]
+    fn the_virtual_mic_capture_side_is_the_virtual_input_of_the_same_device() {
+        let ins = [
+            mic("Microfone (USB)", false),
+            mic("CABLE-A Output (VB-Audio Cable A)", false),
+            mic("CABLE Output (VB-Audio Virtual Cable)", false),
+        ];
+        let found = |out: &str| virtual_mic_capture(&ins, out).map(|d| d.name.as_str());
+        assert_eq!(found("CABLE Input (VB-Audio Virtual Cable)"), Some("CABLE Output (VB-Audio Virtual Cable)"));
+        assert_eq!(found("CABLE-A Input (VB-Audio Cable A)"), Some("CABLE-A Output (VB-Audio Cable A)"));
+        assert_eq!(found("CABLE-B Input (VB-Audio Cable B)"), None, "another cable is not ours");
+        // a real device that happens to share a description is not a virtual mic
+        assert_eq!(found("Microfone (USB)"), None);
+        assert!(virtual_mic_capture(&[], "CABLE Input (VB-Audio Virtual Cable)").is_none());
+    }
+
+    #[test]
     fn idle_engine_reports_nothing_running() {
-        let engine = MicEngine::new(vec![]);
+        let mut engine = MicEngine::new(vec![]);
         let st = engine.status();
         assert!(!st.running && st.error.is_none() && st.denoise_active.is_none());
         assert!(engine.take_calibration().is_none());
+        assert_eq!((st.references, st.echo_score, st.clip_events), (0, 0.0, 0));
+        assert!(st.voice_db.is_none() && st.echo_db.is_none() && st.noise_db.is_none());
+        assert!(engine.input_device_id().is_none() && engine.output_device_id().is_none() && engine.monitor_device_id().is_none());
+        assert!(!engine.shift_mic_volume(-3.0), "no pipeline to tell");
+        engine.set_references(&["whatever".to_string()]); // disabled / never applied: ignored, nothing is opened
+        assert_eq!(engine.status().references, 0);
     }
 
     #[test]

@@ -8,13 +8,16 @@ use wasapi::{DeviceCollection, Direction};
 pub enum Flow {
     Capture,
     Render,
+    /// A render endpoint opened for capture: what its speakers play (WASAPI loopback).
+    Loopback,
 }
 
 impl Flow {
-    fn direction(self) -> Direction {
+    /// The kind of endpoint this flow opens (a loopback opens a render endpoint).
+    pub(crate) fn direction(self) -> Direction {
         match self {
             Flow::Capture => Direction::Capture,
-            Flow::Render => Direction::Render,
+            Flow::Render | Flow::Loopback => Direction::Render,
         }
     }
 }

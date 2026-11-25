@@ -2,7 +2,7 @@
 
 Ferramenta leve e de código aberto para Windows 10/11 que faz duas coisas:
 
-1. **Microfone limpo**: pega o seu microfone real, tira ruído com IA (RNNoise ou DeepFilterNet3), segura vozes de fundo, nivela o volume e entrega tudo num **microfone virtual**. Discord, Meet, Zoom e companhia usam esse microfone virtual.
+1. **Microfone limpo**: pega o seu microfone real, tira ruído com IA (RNNoise ou DeepFilterNet3), segura vozes de fundo, mantém o volume da sua voz estável e entrega tudo num **microfone virtual**. Discord, Meet, Zoom e companhia usam esse microfone virtual.
 2. **Canais de saída** Jogo / Chat / Mídia / Aux: cada programa que toca áudio pertence a um canal, e cada canal tem sua saída (fone, caixa...), seu volume e seu mudo. Spotify e YouTube na Mídia, Discord e Meet no Chat, jogos no Jogo.
 
 Roda sem janela, como um agente em segundo plano (ícone na bandeja), e é controlado por um painel local em `http://127.0.0.1:47800`. Sem Electron, sem nuvem: um único `clarim.exe`.
@@ -63,7 +63,57 @@ Isso para o serviço, remove o registro e a entrada do menu Iniciar, tira do Equ
 
 No programa, escolha como **microfone/entrada**: **CABLE Output (VB-Audio Virtual Cable)**. É o lado de captura do cabo; o Clarim escreve no lado "CABLE Input". No painel, em "Microfone", a entrada deve ser o seu microfone **real**. Se você escolher o próprio CABLE Output como entrada, o Clarim recusa, porque causaria eco em loop.
 
-Dica: desative "Controle automático de ganho" e a supressão de ruído do próprio Discord/Meet, para não processar duas vezes.
+Dica: desative o **controle automático de ganho** (no Discord, "Controle automático de ganho") e a **supressão de ruído** do próprio Discord/Meet/Zoom, para não processar duas vezes. O ajuste automático de volume do programa briga com o "Volume automático" do Clarim: os dois ficam correndo atrás um do outro e o volume da sua voz sobe e desce. Veja "Volume automático".
+
+## Volume automático
+
+A chave **Volume automático** (cartão "Microfone", coluna "Tom e nível") vem ligada e mantém a sua voz no mesmo volume na chamada: não estoura nem fica baixa. Embaixo dela o painel mostra o ganho de agora e o nível da sua voz, tipo "ganho +6 dB · voz −23 dBFS".
+
+- **Alvo**: o volume da sua fala fica perto de **−23 dBFS** (a média, em dB, do volume de cada pedacinho de 10 ms em que você está falando).
+- **Aprende só com a sua voz**: só conta o que o Clarim reconhece como fala sua. Silêncio, ruído e voz bem mais baixa que a sua (alguém longe, som vazando) não mexem no nível. Ele só começa a ajustar depois de ouvir você falar um pouco.
+- **Ganho de −12 a +20 dB**: sobe devagar (cerca de 3 dB por segundo) e desce rápido (cerca de 10 dB por segundo), então uma voz mais alta é segurada logo. O limitador de −1 dBFS continua no fim da cadeia, e o ganho ainda recua sozinho se o pico da voz chegar perto do limite.
+- **Não levanta o ruído**: o ganho nunca sobe a ponto de deixar o ruído entre as palavras acima de −55 dBFS. Num microfone com muito ruído de fundo o ganho máximo fica menor, e a voz pode chegar abaixo do alvo.
+- **Desligar**: tire a chave. O ganho volta a 0 dB em menos de 1 s, sem estalo, e a voz sai como o microfone entrega (mais os ganhos de entrada e de saída que você ajustou).
+- **Só um controle automático por vez**: desligue o do programa da chamada (veja a dica acima).
+
+### Se o microfone estourar: volume do Windows
+
+Quando o sinal do próprio microfone estoura (corta no topo) enquanto você fala, nada que vem depois conserta. Com o Volume automático ligado e a chave **Ajustar o volume do microfone no Windows se estourar** ligada (em "Avançado", vem ligada), o Clarim mexe no volume do microfone real no Windows, **só durante chamadas**:
+
+- **Abaixa em passos de 3 dB**, no máximo **12 dB no total**, com pelo menos 10 s entre um passo e outro. Bater na mesa (sem voz) não conta como estouro.
+- **Só em microfones com volume de hardware**: é o controle de "Níveis" do microfone no Windows. Se o seu não tem (ou o volume já está no mínimo), o Clarim não mexe em nada e o painel diz: abaixe o "Aumento do microfone" (Propriedades do microfone > Níveis) ou afaste o microfone.
+- Se abaixar não adianta (os estouros não caem pelo menos pela metade), ele devolve o que tirou nessa rodada, **para de tentar até o Clarim reiniciar** e o painel mostra o mesmo aviso de microfone sem volume de hardware.
+- **Devolve** em passos de 3 dB, até o que ele mesmo tirou, quando a sua voz continua mais de 6 dB abaixo do alvo mesmo com o Volume automático no máximo (+20 dB) por uns 10 s, sem estourar há 1 minuto. Nunca passa do volume que o microfone tinha antes. Ao **sair do Clarim** ("Sair" na bandeja) ele também devolve o que tirou, se você não mexeu no volume nesse meio-tempo; se mexeu, só esquece a anotação.
+- O quanto ele tirou fica anotado no `config.json` (`mic_volume_taken`, não edite). Se o Clarim fechar sem avisar, a anotação fica e ele devolve na próxima chamada em que a voz estiver baixa (com o mesmo microfone). Se você subir o volume no Windows por conta própria, ele percebe na hora de devolver (ou ao sair) e só apaga a anotação.
+- Depois de cada ajuste o painel mostra uma nota por 1 minuto, e ao abaixar a bandeja dá um balão discreto, sem som ("Microfone estourando"), uma vez por chamada. A calibração do Foco na voz acompanha o novo volume, então você não precisa recalibrar.
+- **Desligar**: tire a chave. O Clarim para de mexer no volume; o que ele já tirou volta ao sair, ou você mesmo sobe o volume no Windows.
+
+## Avisos de vazamento na chamada
+
+Mesmo com a supressão ligada, às vezes ainda passa som para o microfone virtual. **Só durante chamadas**, o Clarim avisa quando percebe:
+
+- **Som das caixas** (eco): o que toca nas caixas, de qualquer programa, entra no seu microfone e chega nos outros. O Clarim compara o volume do que toca nas caixas com o do que sai pro microfone virtual, e vê se um repete o outro com atraso. Ele olha só o volume (a cada 10 ms); não grava nem guarda áudio.
+- **Ruído de fundo**: ruído que não é eco e ainda passa pelo filtro entre as suas falas.
+
+**Quando é "em chamada"**: quando algum programa (menos o OBS) está usando o **CABLE Output** como microfone. O painel mostra "Em chamada: Discord" no cartão do microfone. O Clarim leva até uns 3 s para notar que a chamada começou e segura o estado por uns 8 s depois que ela termina. Fora de chamada ele não olha as caixas.
+
+**Como avisa** (discreto):
+
+- Um **balão no ícone da bandeja, sem som**: "Som vazando na chamada" ou "Ruído passando na chamada". Um por tipo em cada chamada; o mesmo aviso só volta depois de 10 min seguidos de vazamento.
+- **Em tela cheia, apresentação ou com o Windows "ocupado"** (um jogo, por exemplo) o balão não aparece: ele espera e aparece quando você der alt-tab.
+- Um **aviso amarelo no painel**, que fica enquanto o vazamento durar, e a dica do ícone da bandeja vira "Clarim · som vazando na chamada".
+- Não avisa na hora: o vazamento precisa durar alguns segundos (no eco, até uns 20 s) para não dar alarme falso, e o aviso some uns 10 s depois que ele para.
+- Em "Avançado", durante uma chamada, uma linha mostra os números ("Vazamento: eco 0,12 · atraso 250 ms ..."), e o `clarim.log` ganha uma linha a cada 10 s com as mesmas medidas.
+
+O que fazer: para o eco, abaixe o volume das caixas ou use fone; para o ruído, aproxime o microfone, ligue o Foco na voz e use a supressão Forte.
+
+**Limites conhecidos:**
+
+- **O programa da chamada pode já cortar o próprio eco.** Discord (cancelamento de eco ligado por padrão) e Meet/Chrome cortam o eco do áudio deles mesmos depois do Clarim, no CABLE Output. O Clarim vê o som das caixas inteiro e não separa esse áudio do resto, então o aviso de eco vale mais para o som de **outros** programas: voz de jogo, YouTube, podcast. Só com música, o DeepFilterNet3 (Forte) já tira quase tudo, e não avisar é o resultado certo.
+- **Eco muito alto não é medido.** Eco a menos de 10 dB do volume da sua própria voz se confunde com você falando. Um vazamento desse tamanho é óbvio de qualquer jeito.
+- **O balão é pulado enquanto você está ocupado** (tela cheia etc.). O aviso no painel está sempre lá.
+
+**Desligar**: tire a chave **Avisar se vazar som na chamada** (coluna "Voz"). Desligada, o Clarim nem lê o volume das caixas.
 
 ## Como funcionam os canais
 
@@ -154,6 +204,11 @@ O painel só escuta em `127.0.0.1` e exige um token que muda a cada execução, 
 - **Painel não abre / porta ocupada**: o painel usa a porta **47800** (campo `port` do `config.json`). Se outro programa usa essa porta, o agente registra o erro no log e encerra sem ligar o microfone; o serviço tenta de novo sozinho, com espera crescente de até 30 s. Se já existe um agente rodando (por exemplo um aberto à mão), o novo sai com código 3 e o serviço tenta de novo a cada 30 s.
 - **"Nenhum microfone virtual encontrado"**: instale o VB-Cable e reinicie o Clarim. Outro cabo virtual (nome com "Virtual Audio Driver" ou "Virtual Mic") também serve.
 - **Microfone sem som**: o painel mostra o aviso amarelo "Sem sinal do microfone" quando o Windows entrega só silêncio por uns 2 s ou a entrada fica em silêncio total por uns 5 s (o ícone de status continua verde: o microfone está rodando). Confira se o microfone não está mudo e, em Configurações do Windows > Privacidade > Microfone, se os apps de área de trabalho podem usá-lo.
+- **Minha voz chega baixa na chamada**: com o Volume automático e a chave **Ajustar o volume do microfone no Windows se estourar** ligados, o painel mostra "Sua voz está chegando baixa mesmo com o volume automático no máximo". Suba o volume do microfone no Windows ou aproxime o microfone. O Volume automático chega a +20 dB e não deixa o ruído entre as palavras passar de −55 dBFS, então num microfone com muito ruído de fundo o ganho máximo fica menor.
+- **O volume da minha voz sobe e desce**: quase sempre é o controle automático de ganho do Discord/Meet/Zoom brigando com o Volume automático do Clarim. Desligue o do programa (veja "Usar o microfone virtual no Discord, Meet, Zoom").
+- **O volume do microfone no Windows mudou sozinho**: foi o Clarim, porque o microfone estava estourando durante uma chamada (veja "Se o microfone estourar: volume do Windows"). Ele devolve quando a voz fica baixa e ao sair. Para ele não mexer mais, desligue "Ajustar o volume do microfone no Windows se estourar". Se o painel disser que o microfone satura antes do volume do Windows, ele não tem volume de hardware: diminua o "Aumento do microfone" (Propriedades do microfone > Níveis) ou afaste o microfone.
+- **Apareceu aviso de vazamento, mas ninguém reclama**: o eco vem do som das caixas (jogo, vídeo, outra chamada), e o programa da chamada pode já estar cortando esse eco (veja os limites em "Avisos de vazamento na chamada"). Abaixe as caixas, use fone, ou desligue "Avisar se vazar som na chamada".
+- **O aviso de vazamento não aparece**: ele só vale em chamada, então confira se o painel mostra "Em chamada: ..." (o programa precisa usar o **CABLE Output** como microfone; o OBS não conta, e o painel leva até uns 3 s para notar). O balão não aparece em tela cheia ou com o Windows ocupado, mas o aviso amarelo no painel sim. Eco muito alto, perto do volume da sua voz, não é medido. Durante a chamada o `clarim.log` mostra uma linha a cada 10 s com o que o Clarim está medindo (eco, atraso, nível do eco, nível da voz, ganho, ruído, referências).
 - **"Ouvir meu microfone" não toca nada**: se a saída escolhida (fones) não for encontrada, ou parar depois (fones desligados), o painel mostra um aviso amarelo embaixo de "Fones" e o microfone virtual segue funcionando. O Clarim não tenta de novo sozinho, para não cortar o microfone no meio de uma chamada: com os fones de volta, desligue e ligue "Ouvir meu microfone".
 - **"Instalar equalizador" está desligado**: o serviço do Clarim não está instalado ou não respondeu (o painel diz qual). Rode `clarim.exe install` como administrador; se o serviço é de uma versão antiga, rode de novo para atualizá-lo.
 - **A instalação do equalizador falhou**: o painel mostra o motivo no aviso amarelo (sem internet, "hash diferente" = o arquivo baixado não é o instalador esperado e não foi executado, o instalador não terminou...). O serviço registra os detalhes no `clarim.log` da conta de sistema. Nada é deixado pela metade: o aparelho em que a alteração falhou volta ao que era, e a cópia original fica em `C:\Program Files\Clarim\backup`. Se a instalação foi interrompida e sobrou só parte dos arquivos (sem o registro no Windows), o painel trata o Equalizer APO como **não instalado** e volta a mostrar "Instalar equalizador", que roda o instalador de novo por cima.

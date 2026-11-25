@@ -417,6 +417,24 @@ mod tests {
             "/api/eq_apo/install",
             "/api/eq_apo/device",
             "/api/audio/restart",
+            // calls: voice AGC, leak warnings, Windows mic volume guard
+            "Volume automático",
+            "Mantém sua voz no mesmo volume na chamada: não estoura nem fica baixa.",
+            "Avisar se vazar som na chamada",
+            "Ajustar o volume do microfone no Windows se estourar",
+            "chk('m-leak', 'leak_warnings')",
+            "chk('m-micvol', 'auto_mic_volume')",
+            "id=\"agc\"",
+            "id=\"call-pill\"",
+            "'Em chamada'",
+            "id=\"leak\" class=\"banner warn\" role=\"status\"",
+            "Tem som das caixas vazando no seu microfone: o pessoal da chamada pode ouvir o jogo, vídeos ou outros sons daí. Abaixe o volume das caixas ou use fone.",
+            "Tem ruído de fundo passando pelo filtro na chamada. Aproxime o microfone ou ligue o Foco na voz.",
+            " Tente também o filtro Forte.",
+            "id=\"micvol\" class=\"banner info\"",
+            "id=\"quiet\" class=\"hint\"",
+            "Sua voz está chegando baixa mesmo com o volume automático no máximo. Suba o volume do microfone no Windows ou aproxime o microfone.",
+            "'Vazamento: eco '",
         ] {
             assert!(DASHBOARD_HTML.contains(needle), "dashboard.html lost: {needle}");
         }

@@ -6,10 +6,12 @@ pub mod calib;
 pub mod chain;
 pub mod devices;
 pub mod dsp;
+mod endpoint;
 mod engine;
 mod pacing;
 pub mod pipeline;
 mod recovery;
+mod refs;
 mod selftest;
 
 use anyhow::Result;
@@ -17,7 +19,9 @@ use clarim_core::DeviceInfo;
 use devices::Flow;
 
 pub use devices::{find_virtual_mic, pick_real_mic};
-pub use engine::{MicEngine, NO_VIRTUAL_MIC};
+pub use dsp::agc::{AGC_MAX_GAIN_DB, AGC_MIN_GAIN_DB, AGC_TARGET_DB};
+pub use endpoint::*;
+pub use engine::{default_render_id, virtual_mic_capture, MicEngine, NO_VIRTUAL_MIC};
 pub use pipeline::Counters;
 pub use recovery::{is_audio_service_loss, is_reconnecting, RECONNECTING};
 pub use selftest::selftest;

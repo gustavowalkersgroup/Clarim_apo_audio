@@ -1,9 +1,11 @@
+pub mod agc;
 pub mod basic;
 #[cfg(feature = "dfn")]
 pub mod dfn;
 pub mod denoise;
 pub mod eq;
 pub mod focus;
+pub mod leak;
 
 pub const SAMPLE_RATE: f32 = 48_000.0;
 pub const FRAME: usize = 480; // 10 ms @ 48 kHz, matches RNNoise and DeepFilterNet3 hop size
@@ -23,6 +25,12 @@ pub fn db_to_lin(db: f32) -> f32 {
 #[inline]
 pub fn lin_to_db(lin: f32) -> f32 {
     20.0 * lin.max(1e-9).log10()
+}
+
+/// Mean square (linear power) to dB, floored at -90 dB (also for 0 and NaN).
+#[inline]
+pub fn ms_to_db(ms: f32) -> f32 {
+    10.0 * ms.max(1e-9).log10()
 }
 
 /// One-pole smoothing coefficient for a time constant in ms.

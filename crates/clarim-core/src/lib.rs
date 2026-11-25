@@ -72,7 +72,9 @@ pub struct MicSettings {
     pub gate_threshold_db: f32,
     /// 80 Hz high-pass.
     pub hpf_on: bool,
-    /// Gentle compressor + makeup toward ~-18 dBFS speech.
+    /// Voice AGC: keeps the speech level near -23 dBFS (dB mean of 10 ms frame RMS; gain -12..+20 dB),
+    /// learns only from the user's speech, does not raise the noise between words above -55 dBFS; the
+    /// -1 dBFS limiter stays after it.
     pub auto_level: bool,
     pub eq: EqPreset,
     /// Tone sliders applied after the `eq` preset: low shelf / mid peak / high shelf, each
@@ -84,6 +86,24 @@ pub struct MicSettings {
     pub input_gain_db: f32,
     /// -20..+20
     pub output_gain_db: f32,
+    /// During calls, warn (tray balloon without sound + dashboard) when sound still leaks into the virtual mic.
+    pub leak_warnings: bool,
+    /// During calls, with `auto_level` on, lower the real mic's Windows volume in 3 dB steps when the input
+    /// clips on speech (at most 12 dB in total, only on mics with a hardware volume control). Give back what
+    /// Clarim took when the voice stays too quiet, and on quit.
+    pub auto_mic_volume: bool,
+    /// Clarim's bookkeeping of the Windows mic volume it lowered, never edited by the dashboard.
+    /// `check_mic` keeps the stored value, exactly like `voice_level_db`.
+    pub mic_volume_taken: Option<MicVolumeTaken>,
+}
+
+/// How much of the real mic's Windows volume Clarim took (to be given back): the endpoint, the volume
+/// before Clarim touched it and the dB taken so far.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct MicVolumeTaken {
+    pub device_id: String,
+    pub baseline_db: f32,
+    pub taken_db: f32,
 }
 
 impl Default for MicSettings {
@@ -109,6 +129,9 @@ impl Default for MicSettings {
             eq_treble_db: 0.0,
             input_gain_db: 0.0,
             output_gain_db: 0.0,
+            leak_warnings: true,
+            auto_mic_volume: true,
+            mic_volume_taken: None,
         }
     }
 }
@@ -512,6 +535,28 @@ pub struct AppSession {
     pub peak: f32,
 }
 
+/// What still leaks into the virtual mic during a call.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum LeakKind {
+    /// What the speakers play gets into the real mic.
+    Echo,
+    /// Background noise that still passes the suppressor.
+    Noise,
+}
+
+/// One app capture session on a capture endpoint (from the routing worker).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct CaptureSession {
+    pub pid: u32,
+    /// Exe file name.
+    pub exe: String,
+    /// Capture endpoint the session lives on.
+    pub device_id: String,
+    /// AudioSessionStateActive.
+    pub active: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct MicStatus {
     pub running: bool,
@@ -535,6 +580,51 @@ pub struct MicStatus {
     pub calibrating: bool,
     /// 0..1
     pub calibration_progress: f32,
+    /// Engine fields, filled by `MicEngine::status()`.
+    /// Current AGC gain in dB (0 when off).
+    #[serde(default)]
+    pub agc_gain_db: f32,
+    /// AGC input speech level, dBFS. `None` until confident.
+    #[serde(default)]
+    pub input_voice_db: Option<f32>,
+    /// Speech level at the cable (`input_voice_db` + AGC gain + output gain), dBFS. `None` until confident.
+    #[serde(default)]
+    pub voice_db: Option<f32>,
+    /// 0..1, the max over the running references with an active reference (0 otherwise).
+    #[serde(default)]
+    pub echo_score: f32,
+    /// Leak level of the best-scoring reference, dBFS.
+    #[serde(default)]
+    pub echo_db: Option<f32>,
+    /// Best lag of the best-scoring reference.
+    #[serde(default)]
+    pub echo_lag_ms: f32,
+    /// Residual noise at the output during non-speech, dBFS.
+    #[serde(default)]
+    pub noise_db: Option<f32>,
+    /// Monotonic count of clipped raw input speech frames since the engine started. It resets on restart:
+    /// consumers use `saturating_sub` and treat a decrease as a reset.
+    #[serde(default)]
+    pub clip_events: u32,
+    /// Loopback reference streams running.
+    #[serde(default)]
+    pub references: u32,
+    /// Backend overlay fields: the engine leaves them at their defaults, the backend fills them.
+    /// An app is capturing the virtual mic.
+    #[serde(default)]
+    pub in_call: bool,
+    /// Exe names of those apps, deduped and sorted, without unknown ones.
+    #[serde(default)]
+    pub call_apps: Vec<String>,
+    /// The current alert, only while `in_call`.
+    #[serde(default)]
+    pub leak: Option<LeakKind>,
+    /// PT-BR note about the last Windows mic volume action.
+    #[serde(default)]
+    pub mic_volume_note: Option<String>,
+    /// The voice arrives low even with the AGC at its maximum.
+    #[serde(default)]
+    pub mic_too_quiet: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -890,6 +980,37 @@ mod tests {
         snap.as_object_mut().unwrap().remove("eq_apo");
         let back: Snapshot = serde_json::from_value(snap).unwrap();
         assert_eq!(back.eq_apo, EqApoStatus::default());
+        // a partial config keeps the call features on and owes no mic volume
+        let cfg: Config = serde_json::from_str(r#"{"mic":{"denoise":"light"}}"#).unwrap();
+        assert!(cfg.mic.leak_warnings && cfg.mic.auto_mic_volume, "both default to on");
+        assert_eq!(cfg.mic.mic_volume_taken, None);
+        assert!(MicSettings::default().leak_warnings && MicSettings::default().auto_mic_volume);
+        // the status of an older agent (before the AGC, leak and call fields) gets neutral values
+        let old = r#"{"running":true,"error":null,"input_name":null,"output_name":null,"denoise_active":null,
+                      "in_peak":0.1,"out_peak":0.2,"vad":0.5,"focus_open":false,"dsp_us":10,"latency_ms":30.0,
+                      "calibrating":false,"calibration_progress":0.0}"#;
+        let st: MicStatus = serde_json::from_str(old).unwrap();
+        assert!(st.running && st.in_peak == 0.1);
+        assert_eq!((st.agc_gain_db, st.echo_score, st.echo_lag_ms), (0.0, 0.0, 0.0));
+        assert_eq!((st.input_voice_db, st.voice_db, st.echo_db, st.noise_db), (None, None, None, None));
+        assert_eq!((st.clip_events, st.references, st.in_call, st.mic_too_quiet), (0, 0, false, false));
+        assert!(st.call_apps.is_empty() && st.leak.is_none() && st.mic_volume_note.is_none());
+    }
+
+    #[test]
+    fn leak_and_volume_types_round_trip_with_the_names_the_dashboard_reads() {
+        assert_eq!(serde_json::to_string(&LeakKind::Echo).unwrap(), "\"echo\"");
+        assert_eq!(serde_json::from_str::<LeakKind>("\"noise\"").unwrap(), LeakKind::Noise);
+        let st = MicStatus { in_call: true, leak: Some(LeakKind::Echo), call_apps: vec!["discord.exe".into()], ..MicStatus::default() };
+        let v = serde_json::to_value(&st).unwrap();
+        assert_eq!((v["in_call"].clone(), v["leak"].clone()), (true.into(), "echo".into()));
+        assert_eq!(serde_json::from_value::<MicStatus>(v).unwrap().leak, Some(LeakKind::Echo));
+        let mut cfg = Config::default();
+        cfg.mic.mic_volume_taken = Some(MicVolumeTaken { device_id: "{0.0.1.00000000}.abc".into(), baseline_db: -6.0, taken_db: 3.0 });
+        let back: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back, cfg, "the bookkeeping survives a save");
+        let s = CaptureSession { pid: 7, exe: "discord.exe".into(), device_id: "id".into(), active: true };
+        assert_eq!(serde_json::from_str::<CaptureSession>(&serde_json::to_string(&s).unwrap()).unwrap(), s);
     }
 
     #[test]

@@ -75,7 +75,8 @@ main { display: contents; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .hint { font-size: 12px; color: var(--muted); }
 .lblrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.hint.tight { margin-top: -3px; }
+.hint.tight, .mini.tight { margin-top: -3px; }
+.head-l { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .foot { font: 12px var(--mono); color: var(--muted); padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
 
 select { width: 100%; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
@@ -150,6 +151,7 @@ input[type=range].big { height: 26px; }
 .banner.act .btn { height: 30px; padding: 0 14px; }
 .g.turn { display: inline-block; animation: spin 1.4s linear infinite; }
 .pill { font-size: 11px; font-weight: 650; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--warn); color: var(--warn); background: var(--warn-bg); white-space: nowrap; }
+.pill.call { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .btn.attn { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 55%, transparent); }
 
 /* advanced mic settings */
@@ -234,11 +236,14 @@ input[type=range].big { height: 26px; }
   <main inert>
     <section class="card" aria-labelledby="h-mic">
       <div class="card-head">
-        <h2 id="h-mic">Microfone</h2>
+        <div class="head-l"><h2 id="h-mic">Microfone</h2><span class="pill call" id="call-pill" hidden></span></div>
         <label class="sw" style="min-height:0"><span>Ativo</span><input type="checkbox" role="switch" id="m-enabled"><span class="trk"><span class="knob"></span></span></label>
       </div>
       <div id="mic-err" class="banner err" role="alert" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="mic-err-t"></span></div>
       <div id="silent" class="banner warn" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span>Sem sinal do microfone. Confira se ele não está mudo e se o Windows permite apps de desktop usarem o microfone (Configurações &gt; Privacidade &gt; Microfone).</span></div>
+      <div id="leak" class="banner warn" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="leak-t"></span></div>
+      <div id="micvol" class="banner info" role="status" hidden style="margin-bottom:8px"><span class="g" aria-hidden="true">&#8505;&#xFE0E;</span><span id="micvol-t"></span></div>
+      <p id="quiet" class="hint" role="status" hidden style="margin-bottom:8px">Sua voz está chegando baixa mesmo com o volume automático no máximo. Suba o volume do microfone no Windows ou aproxime o microfone.</p>
 
       <div class="mic-grid">
         <!-- Dispositivos e níveis -->
@@ -279,13 +284,16 @@ input[type=range].big { height: 26px; }
             <span class="mini" id="calib-res" aria-live="polite"></span>
           </div>
           <div class="prog" id="calib-prog" role="progressbar" aria-label="Progresso da calibração" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+          <label class="sw"><span>Avisar se vazar som na chamada</span><input type="checkbox" role="switch" id="m-leak"><span class="trk"><span class="knob"></span></span></label>
         </div>
 
         <!-- Tom e nível -->
         <div class="col">
           <h3 class="sub">Tom e nível</h3>
           <label class="sw"><span>Filtro de graves</span><input type="checkbox" role="switch" id="m-hpf"><span class="trk"><span class="knob"></span></span></label>
-          <label class="sw"><span>Nivelamento automático</span><input type="checkbox" role="switch" id="m-level"><span class="trk"><span class="knob"></span></span></label>
+          <label class="sw"><span>Volume automático</span><input type="checkbox" role="switch" id="m-level" aria-describedby="h-level"><span class="trk"><span class="knob"></span></span></label>
+          <p id="h-level" class="hint tight">Mantém sua voz no mesmo volume na chamada: não estoura nem fica baixa.</p>
+          <p id="agc" class="mini tight" hidden></p>
           <div class="row has-val"><label for="m-ig">Ganho de entrada</label><input type="range" id="m-ig" min="-20" max="20" step="1"><output aria-live="off" class="val" id="m-ig-v" for="m-ig"></output></div>
           <div class="row"><label for="m-eq">Equalizador</label>
             <select id="m-eq"><option value="flat">Neutro</option><option value="clarity">Clareza</option><option value="warm">Quente</option><option value="broadcast">Locutor</option></select>
@@ -298,7 +306,7 @@ input[type=range].big { height: 26px; }
       </div>
 
       <details class="adv">
-        <summary>Avançado <span class="mini">noise gate, ganho de saída e consumo</span></summary>
+        <summary>Avançado <span class="mini">noise gate, ganho de saída, volume do microfone e consumo</span></summary>
         <div class="mic-grid adv-grid">
           <div class="col">
             <label class="sw"><span>Noise gate</span><input type="checkbox" role="switch" id="m-gate"><span class="trk"><span class="knob"></span></span></label>
@@ -306,8 +314,10 @@ input[type=range].big { height: 26px; }
           </div>
           <div class="col">
             <div class="row has-val"><label for="m-og">Ganho de saída</label><input type="range" id="m-og" min="-20" max="20" step="1"><output aria-live="off" class="val" id="m-og-v" for="m-og"></output></div>
+            <label class="sw"><span>Ajustar o volume do microfone no Windows se estourar</span><input type="checkbox" role="switch" id="m-micvol"><span class="trk"><span class="knob"></span></span></label>
           </div>
         </div>
+        <p class="mini" id="leak-dbg" hidden style="margin-top:6px"></p>
         <p class="foot" id="dsp"></p>
       </details>
     </section>
@@ -375,7 +385,8 @@ const CH = [['game', 'Jogo'], ['chat', 'Chat'], ['media', 'Mídia'], ['aux', 'Au
 const LABEL = Object.fromEntries(CH);
 const DN = { off: 'Desligado', light: 'Leve', strong: 'Forte' };
 const MINUS = '−';
-const fmtDb = (v, d = 0) => (v > 0.04 ? '+' : v < -0.04 ? MINUS : '') + Math.abs(v).toFixed(d) + ' dB';
+const fmtDb = (v, d = 0, unit = 'dB') => (v > 0.04 ? '+' : v < -0.04 ? MINUS : '') + Math.abs(v).toFixed(d) + ' ' + unit;
+const rd = v => (v == null ? '' : Math.round(v));   // a rounded reading for a change key; '' for "unknown"
 const toDb = p => (p > 1e-6 ? 20 * Math.log10(p) : -120);
 const pct60 = db => Math.max(0, Math.min(100, (db + 60) / 60 * 100));
 
@@ -514,6 +525,7 @@ const chk = (id, key) => ({ id, key, k: 'check' });
 const rng = (id, key, o) => ({ id, key, k: 'range', to: v => v, from: v => v, fmt: v => v + '', ...o });
 const MIC = [
   chk('m-enabled', 'enabled'), chk('m-hpf', 'hpf_on'), chk('m-level', 'auto_level'), chk('m-gate', 'gate_on'), chk('m-focus', 'voice_focus'), chk('m-mon', 'monitor_on'),
+  chk('m-leak', 'leak_warnings'), chk('m-micvol', 'auto_mic_volume'),
   rng('m-str', 'denoise_strength', { to: v => v / 100, from: v => Math.round(v * 100), fmt: v => Math.round(v * 100) + '%' }),
   rng('m-sens', 'voice_focus_db', { to: v => -v, from: v => -v, fmt: v => Math.abs(v) + ' dB' }),
   rng('m-gate-th', 'gate_threshold_db', { fmt: v => fmtDb(v) }),
@@ -569,6 +581,10 @@ function syncDeps() {
   $('#m-str').disabled = m.denoise === 'off';
   $('#m-sens').disabled = !m.voice_focus;
   $('#m-gate-th').disabled = !m.gate_on;
+  // lowering the Windows mic volume is a part of the automatic volume
+  $('#m-micvol').disabled = !m.auto_level;
+  $('#m-micvol').title = m.auto_level ? '' : 'Precisa do Volume automático ligado.';
+  renderAgc();
   const noMic = !S.mic.running || S.mic.calibrating || performance.now() < calibUntil;
   $('#calib').disabled = noMic;
   $('#calib').title = !S.mic.running ? 'O microfone precisa estar ativo para calibrar.' : '';
@@ -619,6 +635,21 @@ const isMonitorNote = e => /^Ouvir meu microfone/.test(e || '');
 const isReconnecting = e => /^Reconectando ao áudio do Windows/.test(e || '');
 const isFault = e => !!e && !isNote(e) && !isSilentNote(e) && !isMonitorNote(e) && !isReconnecting(e);
 
+/** "ganho +6 dB · voz −23 dBFS" under Volume automático (what the AGC is doing now); hidden while it is off. */
+function renderAgc() {
+  const st = S.mic, on = S.config.mic.auto_level;
+  const e = $('#agc');
+  e.hidden = !on;
+  if (!on) return;
+  e.textContent = 'ganho ' + fmtDb(Math.round(st.agc_gain_db || 0)) + ' · voz ' + (st.voice_db == null ? '—' : fmtDb(Math.round(st.voice_db), 0, 'dBFS'));
+}
+
+const LEAK_ECHO = 'Tem som das caixas vazando no seu microfone: o pessoal da chamada pode ouvir o jogo, vídeos ou outros sons daí. Abaixe o volume das caixas ou use fone.';
+const LEAK_NOISE = 'Tem ruído de fundo passando pelo filtro na chamada. Aproxime o microfone ou ligue o Foco na voz.';
+const LEAK_NOISE_STRONG = ' Tente também o filtro Forte.';
+/** exe names ("discord.exe") as people say them ("Discord") */
+const appLabel = exe => { const n = exe.replace(/\.exe$/i, ''); return n.charAt(0).toUpperCase() + n.slice(1); };
+
 /** Parts of the mic card driven by status (also refreshed from the 100 ms meters). */
 function renderMicStatus() {
   const st = S.mic, m = S.config.mic;
@@ -647,6 +678,24 @@ function renderMicStatus() {
   dsp.textContent = '';
   dsp.append(el('span', { text: st.running ? 'DSP ' + st.dsp_us + ' µs · latência ~' + Math.round(st.latency_ms) + ' ms' : 'Microfone parado' }));
   if (st.running && st.input_name) dsp.append(el('span', { text: 'Entrada: ' + st.input_name }));
+  renderAgc();
+  // call: who is using the virtual mic, what still leaks into it, what the Windows mic volume guard did
+  const inCall = !!st.in_call;
+  const apps = (st.call_apps || []).map(appLabel);
+  const pill = $('#call-pill');
+  pill.hidden = !inCall;
+  pill.textContent = 'Em chamada' + (apps.length ? ': ' + apps.join(', ') : '');
+  const leakText = !inCall ? '' : st.leak === 'echo' ? LEAK_ECHO : st.leak === 'noise' ? LEAK_NOISE + (m.denoise !== 'strong' ? LEAK_NOISE_STRONG : '') : '';
+  $('#leak').hidden = !leakText;
+  $('#leak-t').textContent = leakText;
+  const volNote = st.mic_volume_note || '';
+  $('#micvol').hidden = !volNote;
+  $('#micvol-t').textContent = volNote;
+  $('#quiet').hidden = !st.mic_too_quiet;
+  const dbg = $('#leak-dbg');
+  dbg.hidden = !inCall;
+  dbg.textContent = !inCall ? '' : 'Vazamento: eco ' + (st.echo_score || 0).toFixed(2).replace('.', ',') + ' · atraso ' + Math.round(st.echo_lag_ms || 0) + ' ms · ruído '
+    + (st.noise_db == null ? '—' : fmtDb(Math.round(st.noise_db), 0, 'dBFS')) + ' · referências ' + (st.references || 0);
 }
 
 function showCalibration(calibrating, p, running) {
@@ -1028,7 +1077,11 @@ function applyMeters(m) {
   const on = st.running && st.vad > 0.5;
   $('#vad').classList.toggle('on', on);
   $('#vad-t').textContent = on ? 'Voz detectada' : 'Sem voz';
-  const key = [st.running, st.error, st.focus_open, st.denoise_active, st.dsp_us >> 5, Math.round(st.latency_ms)].join('|');
+  const key = [
+    st.running, st.error, st.focus_open, st.denoise_active, st.dsp_us >> 5, Math.round(st.latency_ms),
+    st.in_call, st.leak, st.mic_volume_note, st.mic_too_quiet, (st.call_apps || []).join(),
+    rd(st.agc_gain_db), rd(st.voice_db), Math.round(st.echo_score * 100), Math.round(st.echo_lag_ms), rd(st.noise_db), st.references,
+  ].join('|');
   if (key !== micKey) { micKey = key; renderMicStatus(); }
   trackCalibration(st);
   const peaks = new Map(m.sessions);

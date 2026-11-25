@@ -90,6 +90,10 @@ struct Stats {
     noise: Level,
     /// Share of speech frames in which Voice Focus was passing audio.
     focus_open: f64,
+    /// AGC gain on the last speech frame (it is still settling: it rises at 3 dB/s).
+    agc_gain_db: f32,
+    /// Output speech level: dB mean of the 10 ms frame RMS over the speech frames, dBFS.
+    out_speech_db: f64,
     active: DenoiseMode,
 }
 
@@ -99,6 +103,7 @@ fn measure(frames: &[[f32; FRAME]], params: &DspParams) -> Result<Stats> {
     let (mut spent, mut max_us, mut timed) = (0.0f64, 0.0f64, 0usize);
     let (mut speech, mut noise) = (Level::default(), Level::default());
     let (mut open_frames, mut speech_frames) = (0usize, 0usize);
+    let (mut agc_gain_db, mut out_db_sum) = (0.0f32, 0.0f64);
     for (i, input) in frames.iter().enumerate() {
         let mut buf = *input;
         let t0 = Instant::now();
@@ -116,6 +121,8 @@ fn measure(frames: &[[f32; FRAME]], params: &DspParams) -> Result<Stats> {
                 speech.add(input, &buf);
                 speech_frames += 1;
                 open_frames += usize::from(info.focus_open);
+                agc_gain_db = info.agc_gain_db;
+                out_db_sum += db(buf.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / FRAME as f64);
             } else if pos >= QUIET_FROM {
                 noise.add(input, &buf);
             }
@@ -127,6 +134,8 @@ fn measure(frames: &[[f32; FRAME]], params: &DspParams) -> Result<Stats> {
         speech,
         noise,
         focus_open: open_frames as f64 / speech_frames.max(1) as f64,
+        agc_gain_db,
+        out_speech_db: out_db_sum / speech_frames.max(1) as f64,
         active: chain.denoise_active(),
     })
 }
@@ -135,7 +144,8 @@ pub fn selftest() -> Result<String> {
     let frames = synth_frames();
     let mut report = format!(
         "selftest: {FRAMES} frames of {FRAME} samples @ 48 kHz (10 ms each, budget 10000 us), full chain, Voice Focus on\n\
-         levels are RMS dBFS input -> output; the chain adds +6 dB auto-level makeup and Voice Focus mutes non-speech by 30 dB\n"
+         levels are RMS dBFS input -> output; auto level is the voice AGC (gain rises at 3 dB/s toward a -23 dBFS \
+         speech level, so it is still settling after 6 s) and Voice Focus mutes non-speech by 30 dB\n"
     );
     let mut failed = false;
 
@@ -184,7 +194,8 @@ pub fn selftest() -> Result<String> {
             }
             Ok(format!(
                 "{name:<24} avg {:>6.1} us  max {:>6.1} us  speech {:>6.1} -> {:>6.1}  noise-only {:>6.1} -> {:>6.1}  \
-                 denoise alone {:>+6.1} dB on noise  focus open {:>3.0}% of speech  (chain build {build_ms:.0} ms)",
+                 denoise alone {:>+6.1} dB on noise  focus open {:>3.0}% of speech  \
+                 AGC gain {:>+5.1} dB, output speech level {:>6.1} dBFS  (chain build {build_ms:.0} ms)",
                 st.avg_us,
                 st.max_us,
                 st.speech.in_db(),
@@ -193,6 +204,8 @@ pub fn selftest() -> Result<String> {
                 st.noise.out_db(),
                 -drop_db,
                 st.focus_open * 100.0,
+                st.agc_gain_db,
+                st.out_speech_db,
             ))
         })();
         match result {

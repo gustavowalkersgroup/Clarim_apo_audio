@@ -10,10 +10,12 @@
 //! `MicEngine` (engine.rs) owns one `EngineHandle` at a time; devices are already resolved to ids here.
 
 use crate::calib::{CalibShared, Calibrator};
-use crate::chain::{DspParams, MicChain};
+use crate::chain::{DspParams, FrameInfo, MicChain};
 use crate::devices::Flow;
+use crate::dsp::leak::{EchoDetector, NoiseFloor};
 use crate::dsp::FRAME;
 use crate::pacing::{self, Pacer};
+use crate::refs::{RefReader, RefSlots, RefStep, MAX_REFS};
 use anyhow::{anyhow, bail, Context, Result};
 use clarim_core::DenoiseMode;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -53,6 +55,17 @@ const STALE_RING: usize = FRAME * 2;
 const STALL: Duration = Duration::from_millis(150);
 /// Consecutive silent-flagged capture frames before the "muted or blocked" note (2 s).
 const SILENT_NOTE_FRAMES: usize = 96_000;
+/// A raw frame with at least 2 samples this close to full scale was clipped by the mic or the driver...
+const CLIP_LEVEL: f32 = 0.985;
+const CLIP_SAMPLES: usize = 2;
+/// ...and so was one with this many bit-identical samples in a row at or above `FLAT_LEVEL`: a flat top that
+/// software scaling left below full scale.
+const FLAT_LEVEL: f32 = 0.25;
+const FLAT_RUN: usize = 8;
+/// Clipping only counts on frames this likely to be speech (a desk thump is not the voice clipping).
+const CLIP_VAD: f32 = 0.5;
+/// A reference that has been silent for longer than this (3 s of frames) no longer vouches for an echo score.
+const ECHO_STALE_FRAMES: u32 = 300;
 
 /// Lock-free levels shared between the engine threads and `EngineHandle`.
 pub struct Meters {
@@ -73,6 +86,16 @@ pub struct Meters {
     mic_silent: AtomicBool,
     /// The optional monitor stream could not start or stopped (the mic itself keeps running).
     monitor_failed: AtomicBool,
+    /// Voice AGC and leak meters (f32 bits, written every frame). NaN stands for "not known yet".
+    agc_gain_db: AtomicU32,
+    input_voice_db: AtomicU32,
+    voice_db: AtomicU32,
+    echo_score: AtomicU32,
+    echo_db: AtomicU32,
+    echo_lag_ms: AtomicU32,
+    noise_db: AtomicU32,
+    /// Raw input frames that clipped while the user was speaking (wrapping; only the DSP thread adds).
+    clip_frames: AtomicU32,
     /// Cable stream only. An underrun = the audio engine ran out of queued audio; an overrun = audio was
     /// dropped (a stall, a full ring, a capture discontinuity); a slip = one sample removed or repeated to
     /// follow the cable's clock.
@@ -103,6 +126,14 @@ impl Meters {
             capture_period_ms: AtomicU32::new(0),
             mic_silent: AtomicBool::new(false),
             monitor_failed: AtomicBool::new(false),
+            agc_gain_db: AtomicU32::new(0),
+            input_voice_db: AtomicU32::new(f32::NAN.to_bits()),
+            voice_db: AtomicU32::new(f32::NAN.to_bits()),
+            echo_score: AtomicU32::new(0),
+            echo_db: AtomicU32::new(f32::NAN.to_bits()),
+            echo_lag_ms: AtomicU32::new(0),
+            noise_db: AtomicU32::new(f32::NAN.to_bits()),
+            clip_frames: AtomicU32::new(0),
             underruns: AtomicU32::new(0),
             overruns: AtomicU32::new(0),
             slips: AtomicU32::new(0),
@@ -113,6 +144,44 @@ impl Meters {
     }
     fn get_f32(slot: &AtomicU32) -> f32 {
         f32::from_bits(slot.load(Ordering::Relaxed))
+    }
+    fn set_opt(slot: &AtomicU32, v: Option<f32>) {
+        Self::set_f32(slot, v.unwrap_or(f32::NAN));
+    }
+    fn get_opt(slot: &AtomicU32) -> Option<f32> {
+        Some(Self::get_f32(slot)).filter(|v| !v.is_nan())
+    }
+    /// Current voice AGC gain in dB (0 while auto level is off).
+    pub fn agc_gain_db(&self) -> f32 {
+        Self::get_f32(&self.agc_gain_db)
+    }
+    /// The user's speech level at the AGC input (dBFS); `None` until the AGC is confident.
+    pub fn input_voice_db(&self) -> Option<f32> {
+        Self::get_opt(&self.input_voice_db)
+    }
+    /// The user's speech level at the cable (dBFS); `None` until the AGC is confident.
+    pub fn voice_db(&self) -> Option<f32> {
+        Self::get_opt(&self.voice_db)
+    }
+    /// 0..1: best echo score over the running speaker references (0 when none is active).
+    pub fn echo_score(&self) -> f32 {
+        Self::get_f32(&self.echo_score)
+    }
+    /// Leak level (dBFS) of the best-scoring reference; `None` while unknown.
+    pub fn echo_db(&self) -> Option<f32> {
+        Self::get_opt(&self.echo_db)
+    }
+    /// Best lag (ms) of the best-scoring reference.
+    pub fn echo_lag_ms(&self) -> f32 {
+        Self::get_f32(&self.echo_lag_ms)
+    }
+    /// Residual noise at the output between words (dBFS); `None` until a few seconds were measured.
+    pub fn noise_db(&self) -> Option<f32> {
+        Self::get_opt(&self.noise_db)
+    }
+    /// Raw input frames that clipped during speech since this engine started (wrapping counter).
+    pub fn clip_frames(&self) -> u32 {
+        self.clip_frames.load(Ordering::Relaxed)
     }
     pub fn in_peak(&self) -> f32 {
         Self::get_f32(&self.in_peak)
@@ -182,12 +251,16 @@ pub struct EngineConfig {
     pub monitor_id: Option<String>,
     pub params: DspParams,
     pub calib: Arc<CalibShared>,
+    /// Speaker references written by the loopback threads (they outlive this pipeline).
+    pub refs: Arc<RefSlots>,
 }
 
 /// Live updates for the DSP thread (no stream restart, no glitch). `Copy` payloads only.
 #[derive(Clone, Copy)]
 pub enum EngineCmd {
     SetParams(DspParams),
+    /// The mic's level changed by this many dB outside the chain (the Windows mic volume).
+    MicVolumeShift(f32),
 }
 
 pub struct EngineHandle {
@@ -294,10 +367,7 @@ fn flush_denormals() {
 }
 
 fn open_device(flow: Flow, id: Option<&str>) -> Result<wasapi::Device> {
-    let dir = match flow {
-        Flow::Capture => Direction::Capture,
-        Flow::Render => Direction::Render,
-    };
+    let dir = flow.direction();
     match id {
         None => wasapi::get_default_device(&dir).map_err(|e| anyhow!("default device: {e}")),
         Some(want) => {
@@ -344,36 +414,70 @@ impl Drop for EventCloser {
 }
 
 /// Field order matters: the client is released first, the event is closed last.
-struct OpenedStream {
-    client: wasapi::AudioClient,
-    event: wasapi::Handle,
+pub(crate) struct OpenedStream {
+    pub(crate) client: wasapi::AudioClient,
+    pub(crate) event: wasapi::Handle,
     _event_closer: EventCloser,
-    channels: usize,
+    pub(crate) channels: usize,
+    /// Sample rate in Hz (48 000 unless a loopback had to take the device's mix format).
+    pub(crate) rate: u32,
     /// Default device period in ms.
-    period_ms: f32,
+    pub(crate) period_ms: f32,
 }
 
-fn open_stream(flow: Flow, id: Option<&str>) -> Result<OpenedStream> {
-    let dir = match flow {
-        Flow::Capture => Direction::Capture,
-        Flow::Render => Direction::Render,
-    };
+/// A loopback keeps this much audio queued in the endpoint (100 ns units, 200 ms), so a late wake-up
+/// loses nothing.
+const LOOPBACK_BUFFER_100NS: i64 = 2_000_000;
+
+/// The format `open_stream` asks a device for.
+#[derive(Clone, Copy)]
+enum Want {
+    /// 48 kHz 32-bit float with this many channels (the engine converts when the device differs).
+    Float48k(usize),
+    /// What the audio engine mixes in (loopback fallback).
+    MixFormat,
+}
+
+/// The device's shared-mode mix format when it is plain 32-bit float (it is, for every endpoint seen so far).
+// ponytail: integer mix formats are refused, add a decoder if a driver ever reports one.
+fn float_mix_format(client: &wasapi::AudioClient) -> Result<WaveFormat> {
+    let f = client.get_mixformat().map_err(|e| anyhow!("mix format: {e}"))?;
+    if f.get_bitspersample() != 32 || f.get_subformat().ok() != Some(SampleType::Float) || f.get_nchannels() == 0 || f.get_samplespersec() < 8_000 {
+        bail!("mix format is not 32-bit float ({} bit, {} ch, {} Hz)", f.get_bitspersample(), f.get_nchannels(), f.get_samplespersec());
+    }
+    Ok(f)
+}
+
+pub(crate) fn open_stream(flow: Flow, id: Option<&str>) -> Result<OpenedStream> {
+    // a loopback is a capture stream on a render endpoint (wasapi picks the loopback flags from that pair)
+    let dir = if flow == Flow::Render { Direction::Render } else { Direction::Capture };
     // try mono first for capture; render is always stereo
-    let channel_attempts: &[usize] = match flow {
-        Flow::Capture => &[1, 2],
-        Flow::Render => &[2],
+    let wants: &[Want] = match flow {
+        Flow::Capture => &[Want::Float48k(1), Want::Float48k(2)],
+        Flow::Render => &[Want::Float48k(2)],
+        Flow::Loopback => &[Want::Float48k(2), Want::MixFormat],
     };
     let mut last_err = anyhow!("no channel layout accepted");
-    for &ch in channel_attempts {
+    for &want in wants {
         let device = open_device(flow, id)?;
         let mut client = device
             .get_iaudioclient()
             .map_err(|e| anyhow!("audio client: {e}"))?;
-        let format = WaveFormat::new(32, 32, &SampleType::Float, 48_000, ch, None);
+        let format = match want {
+            Want::Float48k(ch) => WaveFormat::new(32, 32, &SampleType::Float, 48_000, ch, None),
+            Want::MixFormat => match float_mix_format(&client) {
+                Ok(f) => f,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            },
+        };
         let (def_period, _min_period) = client
             .get_periods()
             .map_err(|e| anyhow!("periods: {e}"))?;
-        match client.initialize_client(&format, def_period, &dir, &ShareMode::Shared, true) {
+        let buffer = if flow == Flow::Loopback { LOOPBACK_BUFFER_100NS } else { def_period };
+        match client.initialize_client(&format, buffer, &dir, &ShareMode::Shared, true) {
             Ok(()) => {
                 let event = client
                     .set_get_eventhandle()
@@ -382,11 +486,17 @@ fn open_stream(flow: Flow, id: Option<&str>) -> Result<OpenedStream> {
                     client,
                     _event_closer: EventCloser::of(&event),
                     event,
-                    channels: ch,
+                    channels: format.get_nchannels() as usize,
+                    rate: format.get_samplespersec(),
                     period_ms: def_period as f32 / 10_000.0, // 100 ns units
                 });
             }
-            Err(e) => last_err = anyhow!("init ({ch} ch): {e}"),
+            Err(e) => {
+                last_err = match want {
+                    Want::Float48k(ch) => anyhow!("init ({ch} ch): {e}"),
+                    Want::MixFormat => anyhow!("init (mix format): {e}"),
+                }
+            }
         }
     }
     Err(last_err)
@@ -629,6 +739,84 @@ fn capture_thread(
     let _ = stream.client.stop_stream();
 }
 
+/// Did the mic clip on this raw frame: 2+ samples at (nearly) full scale, or a flat top of 8+ identical
+/// samples (software gain scales a clipped peak to a plateau below full scale).
+fn is_clipped(frame: &[f32]) -> bool {
+    let (mut hot, mut run, mut prev) = (0usize, 0usize, 0u32);
+    for &s in frame {
+        let a = s.abs();
+        hot += usize::from(a >= CLIP_LEVEL);
+        if a >= FLAT_LEVEL {
+            run = if s.to_bits() == prev { run + 1 } else { 1 };
+        } else {
+            run = 0;
+        }
+        if hot >= CLIP_SAMPLES || run >= FLAT_RUN {
+            return true;
+        }
+        prev = s.to_bits();
+    }
+    false
+}
+
+/// DSP-thread side of the leak meters: a reference reader and an echo detector per slot, plus the noise
+/// floor. Fixed arrays built before the real-time guard: no allocation, no lock, no syscall per frame.
+struct LeakProbe {
+    readers: [RefReader; MAX_REFS],
+    dets: [EchoDetector; MAX_REFS],
+    /// The slot's loopback was running at the last frame.
+    live: [bool; MAX_REFS],
+    noise: NoiseFloor,
+}
+
+impl LeakProbe {
+    fn new() -> Self {
+        Self {
+            readers: std::array::from_fn(|_| RefReader::new()),
+            dets: std::array::from_fn(|_| EchoDetector::new()),
+            live: [false; MAX_REFS],
+            noise: NoiseFloor::new(),
+        }
+    }
+
+    /// One processed frame (exactly what goes into the cable): feeds every running reference's detector
+    /// and the noise floor, and publishes the best echo reading. `denoise_ms` is the chain's denoiser delay.
+    fn step(&mut self, slots: &RefSlots, out: &[f32], info: &FrameInfo, denoise_ms: f32, meters: &Meters) {
+        let out_ms = out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32;
+        for (i, slot) in slots.0.iter().enumerate() {
+            match self.readers[i].next(slot) {
+                RefStep::Off => {
+                    if std::mem::take(&mut self.live[i]) {
+                        self.dets[i].reset(); // the loopback just stopped: forget its echo
+                    }
+                }
+                RefStep::Reset => {
+                    self.live[i] = true;
+                    self.dets[i].reset(); // a new loopback stream: its history is not ours
+                }
+                RefStep::Block(ms) => {
+                    self.live[i] = true;
+                    self.dets[i].set_denoise_delay_ms(denoise_ms);
+                    self.dets[i].push(ms, out_ms, info.voice_db);
+                }
+                RefStep::Missing => self.live[i] = true,
+            }
+        }
+        // The best running reference that has played within the last 3 s.
+        let (mut score, mut level, mut lag) = (0.0f32, None, 0.0f32);
+        for (det, &live) in self.dets.iter().zip(&self.live) {
+            if live && det.ref_inactive_frames() <= ECHO_STALE_FRAMES && det.score() > score {
+                (score, level, lag) = (det.score(), det.level_db(), det.best_lag_ms());
+            }
+        }
+        Meters::set_f32(&meters.echo_score, score);
+        Meters::set_opt(&meters.echo_db, level);
+        Meters::set_f32(&meters.echo_lag_ms, lag);
+        self.noise.push(out_ms, info.vad);
+        Meters::set_opt(&meters.noise_db, self.noise.floor_db());
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dsp_thread(
     cfg: EngineConfig,
@@ -645,6 +833,7 @@ fn dsp_thread(
     // meanwhile; the backlog rule below drops what is stale afterwards. Real-time scheduling starts only
     // after the build, so it does not hog a core at that priority.
     let mut chain = MicChain::new(&cfg.params);
+    let mut probe = LeakProbe::new(); // before the real-time guard, like everything that allocates
     let _rt = RtGuard::enter();
     let mut active = chain.denoise_active();
     meters.set_denoise_active(active);
@@ -664,6 +853,11 @@ fn dsp_thread(
                 EngineCmd::SetParams(p) => {
                     input_gain_db = p.input_gain_db;
                     chain.set_params(&p); // first switch to strong stalls this thread ~0.5 s
+                }
+                EngineCmd::MicVolumeShift(db) => {
+                    if db.is_finite() {
+                        chain.shift_input_db(db);
+                    }
                 }
             }
         }
@@ -690,6 +884,7 @@ fn dsp_thread(
 
         let in_peak = frame.iter().fold(0.0f32, |p, s| p.max(s.abs()));
         in_hold = in_peak.max(in_hold * METER_DECAY);
+        let clipped = is_clipped(&frame); // the raw frame, before any gain
 
         let t0 = Instant::now();
         let info = chain.process(&mut frame);
@@ -697,6 +892,17 @@ fn dsp_thread(
 
         let out_peak = frame.iter().fold(0.0f32, |p, s| p.max(s.abs()));
         out_hold = out_peak.max(out_hold * METER_DECAY);
+
+        // Speech probability, voice level, clipping and leak meters. Stored before the frame leaves for the
+        // cable, so whoever sees the frame also sees these.
+        Meters::set_f32(&meters.vad, info.vad);
+        if clipped && info.vad >= CLIP_VAD {
+            meters.clip_frames.fetch_add(1, Ordering::Relaxed);
+        }
+        Meters::set_f32(&meters.agc_gain_db, info.agc_gain_db);
+        Meters::set_opt(&meters.input_voice_db, info.input_voice_db);
+        Meters::set_opt(&meters.voice_db, info.voice_db);
+        probe.step(&cfg.refs, &frame, &info, chain.latency_ms(), meters);
 
         if chain.denoise_active() != active {
             active = chain.denoise_active();
@@ -735,7 +941,6 @@ fn dsp_thread(
 
         Meters::set_f32(&meters.in_peak, in_hold);
         Meters::set_f32(&meters.out_peak, out_hold);
-        Meters::set_f32(&meters.vad, info.vad);
         meters.focus_open.store(info.focus_open, Ordering::Relaxed);
         meters.dsp_us.store(dsp_us_avg as u32, Ordering::Relaxed);
         Meters::set_f32(&meters.pipeline_ms, pipeline_avg);
@@ -997,6 +1202,7 @@ mod tests {
         running: Arc<AtomicBool>,
         meters: Arc<Meters>,
         calib: Arc<CalibShared>,
+        refs: Arc<RefSlots>,
         thread: Option<JoinHandle<()>>,
     }
 
@@ -1012,12 +1218,14 @@ mod tests {
             let running = Arc::new(AtomicBool::new(true));
             let meters = Arc::new(Meters::new());
             let calib = Arc::new(CalibShared::new());
+            let refs = Arc::new(RefSlots::new());
             let cfg = EngineConfig {
                 input_id: None,
                 output_id: String::new(),
                 monitor_id: None,
                 params,
                 calib: calib.clone(),
+                refs: refs.clone(),
             };
             let thread = {
                 let (running, meters) = (running.clone(), meters.clone());
@@ -1025,7 +1233,7 @@ mod tests {
                     dsp_thread(cfg, raw_cons, cable_prod, None::<ringbuf::HeapProd<f32>>, cmd_rx, &running, &meters, &[]);
                 })
             };
-            Self { raw_prod, cable_cons, cmd_tx, running, meters, calib, thread: Some(thread) }
+            Self { raw_prod, cable_cons, cmd_tx, running, meters, calib, refs, thread: Some(thread) }
         }
 
         /// What the capture thread does after a push.
@@ -1150,6 +1358,214 @@ mod tests {
         rig.cable_cons.pop_slice(&mut out);
         assert_eq!(out[..], backlog[FRAME * 9..]);
         assert_eq!(rig.meters.counters().overruns, 1);
+    }
+
+    fn pw(db: f32) -> f32 {
+        10.0f32.powf(db / 10.0)
+    }
+
+    /// Loudness envelope in dB, one value per frame: alternates -20 / -50 dB, dwell 5..=40 frames from `Noise`.
+    fn envelope(seed: u32, frames: usize) -> Vec<f32> {
+        let mut noise = Noise::new(seed);
+        let mut out = Vec::with_capacity(frames + 40);
+        let mut high = true;
+        while out.len() < frames {
+            let dwell = 5 + ((noise.sample() * 0.5 + 0.5) * 36.0) as usize;
+            out.extend(std::iter::repeat_n(if high { -20.0 } else { -50.0 }, dwell));
+            high = !high;
+        }
+        out.truncate(frames);
+        out
+    }
+
+    /// A frame of white noise with mean square `ms` (uniform noise in [-1, 1) has a mean square of 1/3).
+    fn noise_frame(noise: &mut Noise, ms: f32) -> [f32; FRAME] {
+        let amp = (ms * 3.0).sqrt();
+        std::array::from_fn(|_| noise.sample() * amp)
+    }
+
+    /// A rig with slot 0 begun by hand, past its first roundtrip (the DSP thread is up).
+    fn echo_rig() -> Rig {
+        let mut rig = Rig::new();
+        rig.refs.0[0].begin();
+        rig.roundtrip(&[0.0; FRAME]);
+        rig
+    }
+
+    /// Publishes exactly one reference block per roundtrip, while the mic hears the same envelope 25 frames
+    /// later, 30 dB down, over -70 dB of independent noise.
+    fn echo_for(rig: &mut Rig, refs: &[f32]) {
+        let mut noise = Noise::new(77);
+        for (t, &r) in refs.iter().enumerate() {
+            rig.refs.0[0].push(pw(r));
+            let echo = t.checked_sub(25).map_or(0.0, |s| pw(refs[s] - 30.0)) + pw(-70.0);
+            rig.roundtrip(&noise_frame(&mut noise, echo));
+        }
+    }
+
+    #[test]
+    fn echo_score_rises_when_the_mic_hears_the_reference_late() {
+        let mut rig = echo_rig();
+        echo_for(&mut rig, &envelope(0xC0FFEE, 1500));
+        let m = &rig.meters;
+        assert!(m.echo_score() > 0.5, "echo score {:.3} after 15 s, lag {} ms, level {:?}", m.echo_score(), m.echo_lag_ms(), m.echo_db());
+        assert!((m.echo_lag_ms() - 240.0).abs() <= 20.0, "the reader sits 1 block behind the newest: expected about 240 ms, got {}", m.echo_lag_ms());
+        assert!(m.echo_db().is_some_and(|db| (-80.0..=-45.0).contains(&db)), "leak level {:?}", m.echo_db());
+
+        // a loopback that stops takes its reading with it, at once
+        rig.refs.0[0].end();
+        rig.roundtrip(&[0.0; FRAME]);
+        assert_eq!((rig.meters.echo_score(), rig.meters.echo_db()), (0.0, None), "stopped loopback must clear the reading");
+    }
+
+    #[test]
+    fn echo_score_clears_after_five_seconds_of_silent_reference() {
+        let mut rig = echo_rig();
+        echo_for(&mut rig, &envelope(0xC0FFEE, 1500));
+        assert!(rig.meters.echo_score() > 0.5, "echo score {:.3}", rig.meters.echo_score());
+        let mut noise = Noise::new(78);
+        let mut frozen = None;
+        for t in 0..500 {
+            rig.refs.0[0].push(0.0);
+            rig.roundtrip(&noise_frame(&mut noise, pw(-70.0)));
+            if t == 100 {
+                frozen = Some(rig.meters.echo_score()); // the 80-frame history holds only silence by now
+            }
+            if t == 250 {
+                let score = rig.meters.echo_score();
+                assert!(score > 0.0 && Some(score) == frozen, "a silent reference keeps its score for 3 s: {frozen:?} then {score}");
+            }
+        }
+        assert_eq!(rig.meters.echo_score(), 0.0, "5 s of silent reference must clear the score");
+        assert_eq!(rig.meters.echo_db(), None);
+    }
+
+    #[test]
+    fn clipped_speech_is_counted_but_clean_speech_and_loud_noise_are_not() {
+        let mut rig = Rig::new();
+        let (mut voice, mut noise) = (Voice::new(), Noise::new(41));
+        let mut speech = |gain: f32| -> [f32; FRAME] {
+            std::array::from_fn(|_| (voice.sample() * gain + noise.sample() * 0.03).clamp(-1.0, 1.0))
+        };
+        for _ in 0..200 {
+            rig.roundtrip(&speech(1.0));
+        }
+        assert_eq!(rig.meters.clip_frames(), 0, "clean speech peaks near 0.2: nothing clips");
+
+        // the same voice into a mic that is far too hot: peaks stuck at full scale
+        for _ in 0..150 {
+            rig.roundtrip(&speech(12.0));
+        }
+        let counted = rig.meters.clip_frames();
+        assert!(counted > 20, "{counted} clipped speech frames in 1.5 s of clipped speech (vad now {})", rig.meters.vad());
+
+        // Full-scale white noise clips on every frame. Whether a frame counts then follows the speech
+        // probability alone (the meter is stored before the frame leaves, so it is this frame's), and the
+        // frames RNNoise takes for noise must not count.
+        let (mut expected, mut ignored) = (rig.meters.clip_frames(), 0);
+        for _ in 0..100 {
+            let hot: [f32; FRAME] = std::array::from_fn(|_| (noise.sample() * 1.2).clamp(-1.0, 1.0));
+            assert!(is_clipped(&hot), "the test signal itself must clip");
+            rig.roundtrip(&hot);
+            if rig.meters.vad() >= CLIP_VAD {
+                expected += 1;
+            } else {
+                ignored += 1;
+            }
+        }
+        assert!(ignored > 0, "RNNoise took all 100 frames of white noise for speech: the gate is not exercised");
+        assert_eq!(rig.meters.clip_frames(), expected, "only clipped frames with vad >= {CLIP_VAD} count ({ignored} ignored)");
+    }
+
+    #[test]
+    fn clip_detector_sees_peaks_and_flat_tops_but_not_loud_clean_audio() {
+        let sine = |amp: f32| -> [f32; FRAME] { std::array::from_fn(|i| (i as f32 * 0.07).sin() * amp) };
+        assert!(!is_clipped(&sine(0.9)), "loud but clean");
+        assert!(!is_clipped(&sine(0.0)), "silence");
+        let mut one_peak = sine(0.5);
+        one_peak[100] = 1.0;
+        assert!(!is_clipped(&one_peak), "a single full-scale sample is not clipping");
+        one_peak[300] = -0.99;
+        assert!(is_clipped(&one_peak), "two samples at full scale are");
+        let mut flat = sine(0.5);
+        flat[200..208].fill(0.4);
+        assert!(is_clipped(&flat), "8 identical samples at 0.4: a flat top that was scaled down");
+        flat[200..207].fill(0.4);
+        flat[207] = 0.41;
+        assert!(!is_clipped(&flat), "7 identical samples are a coincidence");
+        let mut quiet_run = sine(0.0);
+        quiet_run[10..30].fill(0.1);
+        assert!(!is_clipped(&quiet_run), "a DC offset or a very quiet constant is not clipping");
+    }
+
+    #[test]
+    fn voice_level_becomes_known_within_400_frames_of_speech_through_rnnoise() {
+        let mut rig = Rig::with(DspParams { denoise: DenoiseMode::Light, auto_level: true, ..passthrough() });
+        let (mut voice, mut noise) = (Voice::new(), Noise::new(0x5EED));
+        // the selftest signal: 0.6 s of voice, 0.9 s of silence, over -35 dBFS noise
+        let (mut speech_frames, mut speech_vad, mut run, mut best_run) = (0, 0, 0, 0);
+        let mut known_at = None;
+        for i in 0..400 {
+            let speech = i % 150 < 60;
+            let frame = std::array::from_fn(|_| {
+                let v = voice.sample();
+                (if speech { v } else { 0.0 }) + noise.sample() * 0.03
+            });
+            rig.roundtrip(&frame);
+            if speech {
+                speech_frames += 1;
+                if rig.meters.vad() >= crate::calib::SPEECH_VAD {
+                    (speech_vad, run) = (speech_vad + 1, run + 1);
+                    best_run = best_run.max(run);
+                } else {
+                    run = 0;
+                }
+            }
+            if rig.meters.voice_db().is_some() {
+                known_at = Some(i);
+                break;
+            }
+        }
+        let at = known_at.unwrap_or_else(|| {
+            panic!(
+                "no voice level in 400 frames: vad >= {} on {speech_vad} of {speech_frames} speech frames, longest run {best_run} (the AGC needs a run of 12, then 40 learned frames)",
+                crate::calib::SPEECH_VAD
+            )
+        });
+        let m = &rig.meters;
+        let (input, voice_db) = (m.input_voice_db().expect("input level"), m.voice_db().expect("voice level"));
+        assert!((voice_db - (input + m.agc_gain_db())).abs() < 1e-3, "voice_db {voice_db} = input {input} + gain {}", m.agc_gain_db());
+        assert!((-40.0..-20.0).contains(&voice_db), "known after {at} frames at {voice_db:.1} dBFS");
+    }
+
+    #[test]
+    fn mic_volume_shift_moves_the_learned_voice_level() {
+        let mut rig = Rig::with(DspParams { denoise: DenoiseMode::Light, auto_level: true, ..passthrough() });
+        let (mut voice, mut noise) = (Voice::new(), Noise::new(0x5EED));
+        let mut frame = |speech: bool| -> [f32; FRAME] {
+            std::array::from_fn(|_| {
+                let v = voice.sample();
+                (if speech { v } else { 0.0 }) + noise.sample() * 0.03
+            })
+        };
+        for i in 0..400 {
+            rig.roundtrip(&frame(i % 150 < 60));
+            if rig.meters.input_voice_db().is_some() {
+                break;
+            }
+        }
+        for _ in 0..30 {
+            rig.roundtrip(&frame(false)); // let the detector's speech tail end: nothing is learned from here on
+        }
+        let before = rig.meters.input_voice_db().expect("voice level known");
+        assert!(rig.cmd_tx.try_send(EngineCmd::MicVolumeShift(-3.0)).is_ok());
+        rig.roundtrip(&frame(false));
+        let after = rig.meters.input_voice_db().expect("still known");
+        assert!((after - (before - 3.0)).abs() < 0.01, "MicVolumeShift(-3) moved the level {before:.2} -> {after:.2}");
+        // junk is ignored, not poured into the estimate
+        assert!(rig.cmd_tx.try_send(EngineCmd::MicVolumeShift(f32::NAN)).is_ok());
+        rig.roundtrip(&frame(false));
+        assert_eq!(rig.meters.input_voice_db(), Some(after));
     }
 
     #[test]

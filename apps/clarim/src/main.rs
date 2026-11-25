@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 mod agent;
 mod backend;
+mod callwatch;
 mod eqapo;
 mod instance;
 mod logging;

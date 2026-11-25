@@ -270,6 +270,48 @@ fn volume_is_clamped_and_mic_settings_round_trip() {
 }
 
 #[test]
+fn leak_warnings_and_mic_volume_switches_round_trip() {
+    let s = Server::start();
+    let off = MicSettings { leak_warnings: false, auto_mic_volume: false, ..MicSettings::default() };
+    let r = s.post("/api/mic", &serde_json::to_string(&off).unwrap());
+    assert_eq!(r.status, 200, "{}", r.body);
+    let got = s.backend.mic.lock().unwrap().clone().unwrap();
+    assert!(!got.leak_warnings && !got.auto_mic_volume, "both switches must reach the backend off: {got:?}");
+    // the other one alone, and back on
+    let one = MicSettings { auto_mic_volume: false, ..MicSettings::default() };
+    assert_eq!(s.post("/api/mic", &serde_json::to_string(&one).unwrap()).status, 200);
+    let got = s.backend.mic.lock().unwrap().clone().unwrap();
+    assert!(got.leak_warnings && !got.auto_mic_volume, "leak_warnings on, auto_mic_volume off: {got:?}");
+}
+
+#[test]
+fn a_mic_post_without_the_call_switches_keeps_them_on() {
+    let s = Server::start();
+    let r = s.post("/api/mic", r#"{"denoise":"light"}"#);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let got = s.backend.mic.lock().unwrap().clone().unwrap();
+    assert_eq!(got.denoise, DenoiseMode::Light);
+    assert!(got.leak_warnings && got.auto_mic_volume, "old clients keep the defaults: {got:?}");
+    assert_eq!(got.mic_volume_taken, None);
+}
+
+#[test]
+fn mic_status_json_has_the_keys_the_dashboard_reads() {
+    let s = Server::start();
+    let body: serde_json::Value = serde_json::from_str(&s.authed_get("/api/meters").body).unwrap();
+    for key in [
+        "agc_gain_db", "voice_db", "echo_score", "echo_lag_ms", "noise_db", "references", "in_call", "call_apps", "leak",
+        "mic_volume_note", "mic_too_quiet",
+    ] {
+        assert!(body["mic"].get(key).is_some(), "meters.mic lost `{key}`: {body}");
+    }
+    let state: serde_json::Value = serde_json::from_str(&s.authed_get("/api/state").body).unwrap();
+    for key in ["leak_warnings", "auto_mic_volume"] {
+        assert!(state["config"]["mic"].get(key).is_some(), "config.mic lost `{key}`: {state}");
+    }
+}
+
+#[test]
 fn mic_tone_sliders_round_trip_and_are_clamped() {
     let s = Server::start();
     let r = s.post("/api/mic", r#"{"eq":"clarity","eq_bass_db":3.5,"eq_mid_db":-40,"eq_treble_db":99}"#);

@@ -23,6 +23,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_Com",
     "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
 ] }
 # libDF (lib name `df`). Its tract-* requirements are `^0.21.4`, but tract 0.21.19 (latest 0.21.x when
 # this was written) uses ndarray 0.16 and `symbol_table`, which fails to compile against this libDF commit.
