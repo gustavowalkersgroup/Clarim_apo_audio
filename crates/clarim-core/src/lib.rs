@@ -175,6 +175,10 @@ pub struct Config {
     /// Output equalizer per playback device (key = endpoint id), written as an Equalizer APO config.
     /// A missing entry means "no EQ" (same as all zeros).
     pub output_eq: BTreeMap<String, OutputEq>,
+    /// The "Primeiros passos" card of the dashboard was dismissed. A fresh config starts with it showing; a config
+    /// file written before the card existed (the key is missing) counts as done, so an update does not show it.
+    #[serde(default = "default_true")]
+    pub onboarding_done: bool,
 }
 
 fn default_true() -> bool {
@@ -194,6 +198,7 @@ impl Default for Config {
             port: DEFAULT_PORT,
             call_to_chat: true,
             output_eq: BTreeMap::new(),
+            onboarding_done: false,
         }
     }
 }
@@ -673,6 +678,8 @@ pub trait Backend: Send + Sync + 'static {
     /// Asks the Clarim service to restart Windows Audio (the sound drops for a few seconds); needed after
     /// `eq_apo.needs_restart`. Returns once the service accepted the job.
     fn restart_audio(&self) -> Result<()>;
+    /// Dismisses the "Primeiros passos" card for good (`config.onboarding_done`).
+    fn finish_onboarding(&self) -> Result<()>;
     fn refresh_devices(&self);
 }
 
@@ -793,6 +800,20 @@ mod tests {
         std::fs::write(dir.file(), [0xff, 0xfe, 0x00, 0x7b]).unwrap();
         assert_eq!(Config::load_from(&dir.file()), Config::default());
         assert!(with_suffix(&dir.file(), ".bad").exists());
+    }
+
+    #[test]
+    fn onboarding_shows_on_a_fresh_config_and_not_after_an_update() {
+        assert!(!Config::default().onboarding_done, "a new install shows the first-steps card");
+        // a config.json written before the card existed: the user already found their way around
+        let old: Config = serde_json::from_str(r#"{"port":50000}"#).unwrap();
+        assert!(old.onboarding_done);
+        // what the first run writes (card still showing) survives a save and a load
+        let dir = TempDir::new("onboarding");
+        Config::default().save_to(&dir.file()).unwrap();
+        assert!(!Config::load_from(&dir.file()).onboarding_done);
+        Config { onboarding_done: true, ..Config::default() }.save_to(&dir.file()).unwrap();
+        assert!(Config::load_from(&dir.file()).onboarding_done);
     }
 
     #[test]

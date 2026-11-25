@@ -7,13 +7,31 @@ Ferramenta leve e de código aberto para Windows 10/11 que faz duas coisas:
 
 Roda sem janela, como um agente em segundo plano (ícone na bandeja), e é controlado por um painel local em `http://127.0.0.1:47800`. Sem Electron, sem nuvem: um único `clarim.exe`.
 
+## Instalar
+
+Você só precisa do `clarim.exe`. Nada de compilar, nada de instalar outros programas antes.
+
+1. Baixe o **`clarim.exe`** na página de versões (*Releases*) do projeto no GitHub.
+2. Dê **duplo clique** nele. O Clarim pergunta "Instalar o Clarim neste computador?": clique em **Sim**.
+3. O Windows pede permissão de administrador, **uma vez só**: aceite. Como o `clarim.exe` não tem assinatura digital paga, o Windows pode mostrar "Editor desconhecido" (e o SmartScreen, "O Windows protegeu o computador": clique em "Mais informações" e depois em "Executar assim mesmo").
+4. O Clarim baixa o VB-Cable e avisa que vai abrir o instalador dele (da VB-Audio). Na janela que abrir, clique em **Install Driver** e depois em OK.
+5. Espere um pouco: o Clarim baixa e instala sozinho o Equalizer APO (cerca de 1 minuto; o som pode piscar). No fim aparece um **resumo** do que foi feito e do que ficou pendente, se ficou.
+6. O painel do Clarim abre (se não abrir, use o ícone do Clarim na bandeja ou o menu Iniciar) e, na primeira instalação, mostra **Primeiros passos**. Falta só uma coisa: no **Discord, Meet ou Zoom**, escolha **CABLE Output** como microfone (e desligue o controle automático de ganho do app). Clique em **Entendi** quando terminar; o cartão some.
+
+Pronto. O Clarim passa a iniciar sozinho com o Windows, com um ícone na bandeja. Se o resumo disser para **reiniciar o computador** (às vezes o VB-Cable só termina de instalar depois disso), reinicie.
+
+- **O que a instalação faz:** copia o `clarim.exe` para `C:\Program Files\Clarim`, registra o serviço do Clarim (início automático), e instala o **VB-Cable** e o **Equalizer APO** só se ainda não estiverem no PC (quem já tem um deles não tem o programa mexido). Cada download é conferido contra um SHA-256 fixado no Clarim; se não bater, nada é executado. O registro fica em `C:\Program Files\Clarim\install.log`.
+- **Sobre o VB-Cable:** é um programa da VB-Audio, **grátis por doação** (*donationware*): se gostar, apoie em <https://vb-cable.com>. O Clarim **não inclui nem redistribui** o VB-Cable: a licença da VB-Audio não permite embuti-lo em outro instalador. Por isso o Clarim baixa o pacote **oficial, sem modificação**, do site da VB-Audio, confere o SHA-256, e abre o instalador **da própria VB-Audio** numa janela normal, para você clicar. Se o pacote no site da VB-Audio mudou (hash diferente), o Clarim não executa nada e abre <https://vb-audio.com/Cable/> para você instalar à mão.
+- **Clicou em "Não"?** O Clarim roda sem instalar nada, só enquanto estiver aberto (use "Sair" na bandeja para fechar), como sempre foi. Para instalar depois: `clarim.exe setup`, ou abra o `clarim.exe` de novo. Rodar `setup` outra vez só instala o que falta.
+- **Instalação manual, sem pergunta nenhuma:** veja "Instalar só o serviço (avançado)".
+
 ## Requisitos
 
 - Windows 11 (o roteamento por programa foi verificado nele). No Windows 10 o Clarim trabalha só com o volume dos canais; veja "Como funcionam os canais".
-- **VB-Cable** (gratuito) para o microfone virtual: <https://vb-audio.com/Cable/>. Sem ele os canais funcionam, mas o painel avisa que não há microfone virtual.
-- **Equalizer APO** (gratuito, opcional) só para o equalizador de saída: o **Clarim instala e configura sozinho**, pelo painel, com o serviço do Clarim instalado. Veja "Equalizador".
+- **VB-Cable** (gratuito, da VB-Audio) para o microfone virtual: a instalação acima cuida dele. Sem ele os canais funcionam, mas o painel avisa que não há microfone virtual e o cartão "Primeiros passos" tem o botão "Instalar VB-Cable" (abre <https://vb-audio.com/Cable/>).
+- **Equalizer APO** (gratuito, opcional) só para o equalizador de saída: a instalação acima cuida dele; se você pular, o **Clarim instala e configura sozinho**, pelo painel, com o serviço do Clarim instalado. Veja "Equalizador".
 - Para compilar: Rust estável (toolchain MSVC) e as Build Tools do Visual Studio.
-- Microsoft Edge (já vem no Windows) para a janela do painel, aberta no seu perfil normal do Edge. Se não houver, abre no navegador padrão.
+- WebView2 Runtime (já vem no Windows 11 e com o Edge) para a janela própria do painel. Se não houver, o painel abre no Edge (no seu perfil normal) ou no navegador padrão.
 
 ## Compilar
 
@@ -25,10 +43,13 @@ O executável fica em `target\release\clarim.exe`. O DeepFilterNet3 ("Forte") en
 
 ## Primeiro uso
 
-Execute `clarim.exe`. Ele sobe o agente, põe o ícone na bandeja e abre o painel.
+Depois da instalação (veja "Instalar"), o Clarim já roda sozinho: o painel abre no fim, e depois use o menu Iniciar (Clarim) ou o ícone na bandeja. Sem instalar nada (por exemplo, para testar uma compilação sua), execute `clarim.exe agent` (ou `clarim.exe` e responda **Não** à pergunta de instalação): ele sobe o agente neste processo, põe o ícone na bandeja e abre o painel. Com o agente já rodando, `clarim.exe` só abre o painel.
+
+O painel mostra o cartão **Primeiros passos** até você clicar em **Entendi**: ele lembra de escolher **CABLE Output** como microfone no Discord, Meet ou Zoom e diz se o VB-Cable foi encontrado (se não, tem o botão **Instalar VB-Cable**). Quem já usava o Clarim antes dele existir não vê o cartão.
 
 - Clique esquerdo no ícone abre o painel; clique direito mostra "Abrir painel", "Pausar microfone" e "Sair".
 - Fechar a janela do painel **não** para o Clarim. Para parar, use "Sair" na bandeja.
+- O painel abre numa **janela própria do Clarim** (`clarim.exe window`), com o efeito **Acrylic** do Windows 11: o papel de parede aparece desfocado atrás dos cartões. Ela lembra o tamanho e a posição. Se os "Efeitos de transparência" estiverem desligados (Configurações > Personalização > Cores), ou o tema for de alto contraste, a janela fica sólida, como antes. Só uma janela por vez: abrir de novo traz a que já existe para a frente.
 - Na primeira execução, se o dispositivo padrão do Windows for virtual (por exemplo, se o "CABLE Input" do VB-Cable foi definido como saída padrão), os quatro canais já são apontados para a primeira saída real encontrada. Ajuste no painel. Se o Clarim não conseguir listar os dispositivos de áudio nessa primeira vez, ele não grava nenhuma configuração inicial e tenta de novo na próxima vez que iniciar.
 
 Para testar sem mexer em nada: `clarim.exe agent --dry-run` (só observa os programas, não liga o microfone) ou `clarim.exe agent --no-routing` (liga o microfone, mas não mexe em roteamento nem volume dos programas).
@@ -39,9 +60,9 @@ Medido num PC de mesa (build release, Windows 11, roteamento só observando, pai
 
 A latência estimada do caminho do microfone, só dentro do Clarim, é de cerca de **18 ms** (Desligado), **28 ms** (Leve) e **49 ms** (Forte). Ela não inclui o mixer do Windows, o driver do cabo nem o buffer do programa que lê o cabo. `clarim.exe selftest` mede o processamento no seu PC.
 
-## Instalar como serviço
+## Instalar só o serviço (avançado)
 
-Para o Clarim subir sozinho a cada logon, num prompt **como administrador**:
+A instalação guiada (`clarim.exe setup`, ou o duplo clique) usa isto por baixo e ainda cuida do VB-Cable e do Equalizer APO. Se você quer **só o serviço**, sem perguntas, sem VB-Cable e sem Equalizer APO, num prompt **como administrador**:
 
 ```
 clarim.exe install
@@ -57,7 +78,7 @@ Para remover, **primeiro feche o Clarim** ("Sair" na bandeja) e depois, como adm
 clarim.exe uninstall
 ```
 
-Isso para o serviço, remove o registro e a entrada do menu Iniciar, tira do Equalizer APO (se estiver instalado) o arquivo e a linha do Clarim (veja "Equalizador") e apaga a pasta em Program Files, **menos** `C:\Program Files\Clarim\backup` (a cópia das configurações originais dos aparelhos em que o Equalizer APO foi ligado). O `uninstall` **não** remove o Equalizer APO nem desliga o equalizador dos aparelhos: para isso veja "Equalizador > Como desfazer". Suas configurações em `%APPDATA%\Clarim` ficam. As rotas por programa que o Clarim gravou no Windows também ficam: veja "Desfazer o roteamento".
+Isso para o serviço, remove o registro e a entrada do menu Iniciar, tira do Equalizer APO (se estiver instalado) o arquivo e a linha do Clarim (veja "Equalizador") e apaga a pasta em Program Files, **menos** `C:\Program Files\Clarim\backup` (a cópia das configurações originais dos aparelhos em que o Equalizer APO foi ligado). A pasta apagada inclui a cópia do pacote do VB-Cable que a instalação guiada deixa em `C:\Program Files\Clarim\cache`. O `uninstall` **não** remove o VB-Cable (desinstale em Configurações > Aplicativos) nem o Equalizer APO, e não desliga o equalizador dos aparelhos: para isso veja "Equalizador > Como desfazer". Suas configurações em `%APPDATA%\Clarim` ficam. As rotas por programa que o Clarim gravou no Windows também ficam: veja "Desfazer o roteamento".
 
 ## Usar o microfone virtual no Discord, Meet, Zoom
 
@@ -148,7 +169,7 @@ Se você já tinha o Equalizer APO instalado, o Clarim o reconhece e usa; os apa
 - **Bluetooth:** o Equalizer APO pode não funcionar em fones Bluetooth (há relatos de falha e de chiado no Windows 11). O painel avisa; teste no seu aparelho.
 - **Melhorias de áudio do Windows:** se estiverem desligadas no aparelho, o equalizador não age, e o painel avisa. O Windows também desliga essas melhorias sozinho quando um efeito falha ao carregar várias vezes. Ganhos positivos baixam o volume geral na mesma medida (um "Preamp" negativo igual ao maior ganho), para o som não estourar.
 - **Reiniciar o áudio:** o Clarim reinicia o serviço Windows Audio e os que dependem dele. O microfone e os canais do Clarim se reconectam sozinhos (o painel mostra "Reconectando o áudio…" por alguns segundos). Programas que seguram o áudio podem precisar ser reabertos. Se o reinício falhar, o painel manda reiniciar o PC.
-- **Ainda não testado ao vivo:** o formato do arquivo segue a documentação do Equalizer APO e o registro que o Clarim grava segue o código-fonte do DeviceSelector 1.4.2 (testado só com dados simulados e com os registros lidos de um PC com o Equalizer APO). O download, a instalação, a ligação dos aparelhos e o reinício do áudio feitos pelo próprio Clarim **não foram executados de verdade**: a primeira vez deve ser acompanhada. O SHA-256 fixado do instalador veio do pacote da comunidade Chocolatey (o SourceForge não publica um); se ele estiver errado, a instalação recusa com "hash diferente". Veja `docs/eqapo.md`.
+- **Ainda não testado ao vivo:** o formato do arquivo segue a documentação do Equalizer APO e o registro que o Clarim grava segue o código-fonte do DeviceSelector 1.4.2 (testado só com dados simulados e com os registros lidos de um PC com o Equalizer APO). O download, a instalação, a ligação dos aparelhos e o reinício do áudio feitos pelo próprio Clarim **não foram executados de verdade**: a primeira vez deve ser acompanhada. O SHA-256 fixado do instalador veio do pacote da comunidade Chocolatey (o SourceForge não publica um) e foi conferido contra um download real em 25/11/2026: bate. Se um dia deixar de bater, a instalação recusa com "hash diferente". Veja `docs/eqapo.md`.
 - `--dry-run` deixa o equalizador de saída desligado (só observa).
 
 ## Foco na voz: o que ele faz e o que não faz
@@ -181,16 +202,17 @@ Se o Clarim estiver rodando com o "Roteamento por app" ligado, ele grava as rota
 
 ## Segurança
 
-O painel só escuta em `127.0.0.1` e exige um token que muda a cada execução, mas **qualquer conta de usuário deste PC** consegue abri-lo e mexer no microfone e nos canais. O Clarim parte da suposição de um PC doméstico, sem outras contas em que você não confie. Com o serviço instalado, qualquer conta interativa também pode pedir ao serviço (pelo pipe `\\.\pipe\ClarimEqApo`) que ajuste o equalizador de saída; o serviço só aceita ids de aparelho e ganhos em dB, e nunca grava texto vindo do pedido: na pasta do Equalizer APO ele só escreve o `clarim-eq.txt` (gerado por ele), acrescenta a linha `Include: clarim-eq.txt` ao `config.txt` e guarda a cópia `config.txt.clarim-backup`, sem seguir links e sem ler um `config.txt` que não seja um arquivo comum de até 1 MiB. Atenção: o instalador do Equalizer APO deixa essa pasta `config` gravável por **qualquer conta** do PC (é o desenho dele; o Clarim não muda isso), então qualquer conta pode acrescentar ali linhas como `VSTPlugin:`, que o motor de áudio carrega. O mesmo pipe aceita os pedidos "instalar o Equalizer APO", "ligar/desligar o equalizador de um aparelho" e "reiniciar o áudio": qualquer conta interativa pode pedi-los, mas o serviço só instala o instalador fixo com o SHA-256 conferido, só mexe em aparelhos de áudio que existem (nunca em caminhos ou comandos vindos do pedido) e só reinicia o Windows Audio no máximo uma vez a cada 10 s. Sem o serviço instalado nada disso existe.
+O painel só escuta em `127.0.0.1` e exige um token que muda a cada execução, mas **qualquer conta de usuário deste PC** consegue abri-lo e mexer no microfone e nos canais. O Clarim parte da suposição de um PC doméstico, sem outras contas em que você não confie. Com o serviço instalado, qualquer conta interativa também pode pedir ao serviço (pelo pipe `\\.\pipe\ClarimEqApo`) que ajuste o equalizador de saída; o serviço só aceita ids de aparelho e ganhos em dB, e nunca grava texto vindo do pedido: na pasta do Equalizer APO ele só escreve o `clarim-eq.txt` (gerado por ele), acrescenta a linha `Include: clarim-eq.txt` ao `config.txt` e guarda a cópia `config.txt.clarim-backup`, sem seguir links e sem ler um `config.txt` que não seja um arquivo comum de até 1 MiB. Atenção: o instalador do Equalizer APO deixa essa pasta `config` gravável por **qualquer conta** do PC (é o desenho dele; o Clarim não muda isso), então qualquer conta pode acrescentar ali linhas como `VSTPlugin:`, que o motor de áudio carrega. O mesmo pipe aceita os pedidos "instalar o Equalizer APO", "ligar/desligar o equalizador de um aparelho" e "reiniciar o áudio": qualquer conta interativa pode pedi-los, mas o serviço só instala o instalador fixo com o SHA-256 conferido, só mexe em aparelhos de áudio que existem (nunca em caminhos ou comandos vindos do pedido) e só reinicia o Windows Audio no máximo uma vez a cada 10 s. Sem o serviço instalado nada disso existe. A instalação guiada (`clarim.exe setup`) roda como administrador, na sua sessão: ela baixa o pacote do VB-Cable de `download.vb-audio.com`, confere o SHA-256 fixado, abre o zip com o `tar.exe` do Windows (caminho absoluto em System32), recusa qualquer entrada que saia da pasta de destino e extrai, sem modificar, em `C:\Program Files\Clarim\cache\VBCABLE_Driver_Pack46` (pasta que só administradores gravam) antes de abrir o instalador da VB-Audio. O Equalizer APO é instalado pelo serviço, como descrito em "Equalizador". Como o `setup` copia o `clarim.exe` que você executou para Program Files e roda como administrador, vale o mesmo aviso do `install`: baixe o arquivo só de quem você confia e, se tiver dúvida, rode-o de uma pasta em que apenas administradores gravam.
 
 ## Linha de comando
 
 | Comando | O que faz |
 |---|---|
-| `clarim.exe` | abre o painel se o agente já roda; senão roda o agente neste processo |
+| `clarim.exe` | abre o painel se o agente já roda; sem o Clarim instalado, oferece a instalação guiada (`setup`); senão roda o agente neste processo |
+| `clarim.exe setup [--no-open]` | instalação guiada: serviço + VB-Cable + Equalizer APO, só o que falta; pede administrador uma vez (sozinho) e termina com um resumo; `--no-open` não abre o painel no fim |
 | `clarim.exe agent [--dry-run\|--no-routing]` | roda o agente (é o que o serviço inicia) |
 | `clarim.exe open` | abre o painel (o agente precisa estar rodando) |
-| `clarim.exe install` / `uninstall` | instala / remove o serviço (administrador) |
+| `clarim.exe install` / `uninstall` | instala só o serviço / remove o serviço (administrador) |
 | `clarim.exe devices` | lista as entradas e saídas de áudio |
 | `clarim.exe sessions` | lista os programas que estão tocando áudio, sem alterar nada (`[in call...]` marca o programa da Mídia que está usando um microfone agora e tocaria no Chat) |
 | `clarim.exe selftest` | mede o custo do processamento com áudio sintético, sem tocar em dispositivos |
@@ -199,10 +221,11 @@ O painel só escuta em `127.0.0.1` e exige um token que muda a cada execução, 
 ## Problemas comuns
 
 - **Log**: `%LOCALAPPDATA%\Clarim\clarim.log` (volta a zero ao passar de 5 MB). Veja aqui primeiro. O serviço grava o dele no `%LOCALAPPDATA%` da conta de sistema.
-- **`clarim.exe install` falhou**: veja `C:\Program Files\Clarim\install.log` (o erro completo está no fim; se o serviço antigo já tinha sido parado, o Clarim tenta iniciá-lo de novo, então o Clarim anterior continua funcionando). O `clarim.exe uninstall` também grava ali e deixa o arquivo.
+- **A instalação guiada falhou ou ficou algo pendente**: o resumo no fim diz o que fazer em cada item, e `C:\Program Files\Clarim\install.log` tem o registro de cada passo. Rodar `clarim.exe setup` de novo só refaz o que falta. O VB-Cable às vezes só termina de instalar depois de reiniciar o PC. Duas instalações guiadas ao mesmo tempo não rodam: a segunda avisa que já há uma em andamento.
+- **`clarim.exe install` falhou no serviço**: veja `C:\Program Files\Clarim\install.log` (o erro completo está no fim; se o serviço antigo já tinha sido parado, o Clarim tenta iniciá-lo de novo, então o Clarim anterior continua funcionando). O `setup` nunca mexe num serviço que já está instalado (só o inicia, se estiver parado); se a primeira instalação do serviço falhar no meio, ele desfaz o que fez, e se nem isso for possível o resumo manda rodar `clarim.exe uninstall` (como administrador) e depois `clarim.exe setup`. O `clarim.exe uninstall` também grava ali e deixa o arquivo.
 - **Configuração**: `%APPDATA%\Clarim\config.json`. Se o arquivo estiver corrompido, o Clarim o renomeia para `config.json.bad` e começa do padrão.
 - **Painel não abre / porta ocupada**: o painel usa a porta **47800** (campo `port` do `config.json`). Se outro programa usa essa porta, o agente registra o erro no log e encerra sem ligar o microfone; o serviço tenta de novo sozinho, com espera crescente de até 30 s. Se já existe um agente rodando (por exemplo um aberto à mão), o novo sai com código 3 e o serviço tenta de novo a cada 30 s.
-- **"Nenhum microfone virtual encontrado"**: instale o VB-Cable e reinicie o Clarim. Outro cabo virtual (nome com "Virtual Audio Driver" ou "Virtual Mic") também serve.
+- **"Nenhum microfone virtual encontrado"**: rode `clarim.exe setup` (ou instale o VB-Cable em <https://vb-audio.com/Cable/>) e reinicie o Clarim; se acabou de instalar, reinicie o PC. Outro cabo virtual (nome com "Virtual Audio Driver" ou "Virtual Mic") também serve.
 - **Microfone sem som**: o painel mostra o aviso amarelo "Sem sinal do microfone" quando o Windows entrega só silêncio por uns 2 s ou a entrada fica em silêncio total por uns 5 s (o ícone de status continua verde: o microfone está rodando). Confira se o microfone não está mudo e, em Configurações do Windows > Privacidade > Microfone, se os apps de área de trabalho podem usá-lo.
 - **Minha voz chega baixa na chamada**: com o Volume automático e a chave **Ajustar o volume do microfone no Windows se estourar** ligados, o painel mostra "Sua voz está chegando baixa mesmo com o volume automático no máximo". Suba o volume do microfone no Windows ou aproxime o microfone. O Volume automático chega a +20 dB e não deixa o ruído entre as palavras passar de −55 dBFS, então num microfone com muito ruído de fundo o ganho máximo fica menor.
 - **O volume da minha voz sobe e desce**: quase sempre é o controle automático de ganho do Discord/Meet/Zoom brigando com o Volume automático do Clarim. Desligue o do programa (veja "Usar o microfone virtual no Discord, Meet, Zoom").

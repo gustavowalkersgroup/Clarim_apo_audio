@@ -221,7 +221,7 @@ fn toggle_text(paused: bool) -> &'static str {
     }
 }
 
-const ICON_SIZE: u32 = 32;
+pub(crate) const ICON_SIZE: u32 = 32;
 const ACTIVE_RGB: [u8; 3] = [0x2F, 0x81, 0xF7]; // accent blue
 const PAUSED_RGB: [u8; 3] = [0x8A, 0x8F, 0x98]; // grey
 
@@ -242,8 +242,8 @@ fn on_glyph(x: f32, y: f32, paused: bool) -> bool {
     capsule || cradle || stem || base || slash
 }
 
-/// RGBA pixels of the tray glyph, anti-aliased with 4x4 supersampling.
-fn glyph_rgba(paused: bool) -> Vec<u8> {
+/// RGBA pixels of the tray glyph, anti-aliased with 4x4 supersampling (the dashboard window uses it as its icon too).
+pub(crate) fn glyph_rgba(paused: bool) -> Vec<u8> {
     const SS: u32 = 4;
     let [r, g, b] = if paused { PAUSED_RGB } else { ACTIVE_RGB };
     let mut rgba = Vec::with_capacity((ICON_SIZE * ICON_SIZE * 4) as usize);

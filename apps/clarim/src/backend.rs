@@ -1143,6 +1143,13 @@ impl Backend for AppBackend {
         Ok(())
     }
 
+    fn finish_onboarding(&self) -> Result<()> {
+        // not `edit`: nothing here concerns routing
+        let mut cfg = lock(&self.cfg);
+        cfg.onboarding_done = true;
+        self.persist(&cfg)
+    }
+
     fn refresh_devices(&self) {
         self.rescan();
         self.refresh_eq_apo(true);

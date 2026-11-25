@@ -17,6 +17,8 @@
 //! `--unrouted`  : Discord ignores its channel's output (the "não roteado" tag)
 //! `--note`      : the engine reports a calibration note in `mic.error` (toast only, no red chip)
 //! `--uncalibrated`: Voice Focus is on and the voice was never calibrated (the "sem calibrar" hint)
+//! `--onboarding`: the "Primeiros passos" card (after the guided install) is showing; "Entendi" dismisses it. With `--no-vmic` it
+//!                 shows the missing-VB-Cable variant (link "Instalar VB-Cable")
 //! Output equalizer (default: Equalizer APO installed, written through the service, set up on the first real output).
 //! The buttons work: "Instalar equalizador" runs a fake 6 s install (download, install, attach the channels' devices),
 //! a device switch attaches / detaches, and either leaves "falta reiniciar o áudio" until "Reiniciar áudio agora" has run
@@ -543,6 +545,12 @@ impl Backend for Mock {
         })
     }
 
+    fn finish_onboarding(&self) -> Result<()> {
+        eprintln!("finish onboarding");
+        self.cfg.lock().unwrap().onboarding_done = true;
+        Ok(())
+    }
+
     fn refresh_devices(&self) {
         eprintln!("refresh");
     }
@@ -551,7 +559,7 @@ impl Backend for Mock {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
-    let mut cfg = Config { routing_enabled: !flag("--no-routing"), ..Config::default() };
+    let mut cfg = Config { routing_enabled: !flag("--no-routing"), onboarding_done: !flag("--onboarding"), ..Config::default() };
     cfg.channels.entry(ChannelId::Game).or_default().device_id = Some(RTK.into());
     cfg.channels.entry(ChannelId::Chat).or_default().device_id = Some(BT.into());
     cfg.channels.entry(ChannelId::Media).or_default().volume = 0.6;

@@ -31,8 +31,9 @@ macro_rules! user_bail {
     };
 }
 
-/// The PT-BR sentence inside `e`, or `fallback`.
-pub(crate) fn user_text(e: &anyhow::Error, fallback: &str) -> String {
+/// The PT-BR sentence inside `e`, or `fallback`. Public for the guided install (`clarim setup`), which runs
+/// the VB-Cable steps outside the service and shows their errors itself.
+pub fn user_text(e: &anyhow::Error, fallback: &str) -> String {
     for cause in e.chain() {
         if let Some(user) = cause.downcast_ref::<UserError>() {
             return user.0.clone();

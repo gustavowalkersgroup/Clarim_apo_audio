@@ -86,6 +86,10 @@ impl Backend for Mock {
         self.log("restart_audio".into());
         Ok(())
     }
+    fn finish_onboarding(&self) -> Result<()> {
+        self.log("finish_onboarding".into());
+        Ok(())
+    }
     fn refresh_devices(&self) {
         self.log("refresh".into());
     }
@@ -394,6 +398,16 @@ fn equalizer_apo_install_device_and_audio_restart_reach_the_backend() {
 }
 
 #[test]
+fn the_first_steps_card_is_dismissed_with_a_bodyless_post() {
+    let s = Server::start();
+    let r = s.post("/api/onboarding/done", "");
+    assert_eq!((r.status, r.body.as_str()), (200, r#"{"ok":true}"#), "{}", r.body);
+    assert_eq!(s.backend.calls(), ["finish_onboarding".to_string()]);
+    let state: serde_json::Value = serde_json::from_str(&s.authed_get("/api/state").body).unwrap();
+    assert!(state["config"].get("onboarding_done").is_some(), "config lost `onboarding_done`: {state}");
+}
+
+#[test]
 fn equalizer_apo_routes_check_input_auth_origin_and_method_like_the_others() {
     let s = Server::start();
     for body in [
@@ -413,7 +427,7 @@ fn equalizer_apo_routes_check_input_auth_origin_and_method_like_the_others() {
     let max = format!(r#"{{"device_id":"{}","enabled":false}}"#, "x".repeat(512));
     assert_eq!(s.post("/api/eq_apo/device", &max).status, 200);
     // no token, wrong token, wrong origin: the backend is never reached
-    for path in ["/api/eq_apo/install", "/api/eq_apo/device", "/api/audio/restart"] {
+    for path in ["/api/eq_apo/install", "/api/eq_apo/device", "/api/audio/restart", "/api/onboarding/done"] {
         let body = br#"{"device_id":"d","enabled":true}"#;
         assert_eq!(s.raw("POST", path, &[("Content-Type", "application/json")], body).status, 403, "{path} without a token");
         assert_eq!(s.raw("POST", path, &[("X-Clarim-Token", "nope")], body).status, 403, "{path} with a wrong token");

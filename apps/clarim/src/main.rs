@@ -12,7 +12,9 @@ mod eqapo;
 mod instance;
 mod logging;
 mod open;
+mod setup;
 mod tray;
+mod window;
 
 const USAGE: &str = "\
 Clarim: mic AI noise suppression into a virtual mic + per-app output channels
@@ -20,10 +22,15 @@ Clarim: mic AI noise suppression into a virtual mic + per-app output channels
 usage: clarim [command] [flags]
 
 commands:
-  (none)          open the dashboard if an agent runs, else run the agent in this process
+  (none)          open the dashboard if an agent runs; else, if Clarim is not installed, offer the guided
+                  install (setup); else run the agent in this process
+  setup           guided install: the service + VB-Cable + Equalizer APO, each only if missing; asks for
+                  admin rights once (by itself) and ends with a summary
   agent           run the agent (what the Windows service launches)
-  open            open the dashboard window (the agent must be running)
-  install         install and start the Windows service (needs admin)
+  open            open the dashboard (starts `window`; the agent must be running)
+  window          the dashboard in Clarim's own window, Windows 11 Acrylic backdrop (the agent must be running;
+                  what `open`, the tray and setup start; falls back to Edge / the browser if WebView2 is missing)
+  install        install and start the Windows service only (needs admin)
   uninstall       stop and remove the Windows service (needs admin)
   service         service entry point (started by the Service Control Manager only)
   devices         list audio endpoints
@@ -35,8 +42,9 @@ flags:
   --dry-run       agent: observe only, no app routing or volume changes, mic engine off
   --no-routing    agent: observe only for app routing and volume; mic engine stays on
   --yes, -y       reset-routing: confirm (there is no prompt: without it, nothing is cleared)
+  --no-open       setup: do not open the dashboard at the end
 
-The agent logs to %LOCALAPPDATA%\\Clarim\\clarim.log; install and uninstall log to %ProgramFiles%\\Clarim\\install.log.
+The agent logs to %LOCALAPPDATA%\\Clarim\\clarim.log; install, uninstall and setup log to %ProgramFiles%\\Clarim\\install.log.
 exit codes (agent): 0 quit on purpose, 3 another agent already runs, 1 failure.
 ";
 
@@ -61,10 +69,15 @@ struct AgentFlags {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
-    /// No subcommand: dashboard if an agent exists, else the agent in this process.
+    /// No subcommand: dashboard if an agent exists; with no service either, the guided install is offered; else the
+    /// agent in this process.
     Default(AgentFlags),
     Agent(AgentFlags),
     Open,
+    /// The dashboard window (`window.rs`), a separate process the agent and `open` start.
+    Window,
+    /// The guided install (`setup.rs`); `open` = open the dashboard at the end.
+    Setup { open: bool },
     Install,
     Uninstall,
     Service,
@@ -82,11 +95,13 @@ fn parse(args: &[String]) -> Result<Command> {
     };
     let mut flags = AgentFlags::default();
     let mut yes = false;
+    let mut no_open = false;
     for a in rest {
         match a.as_str() {
             "--dry-run" => flags.dry_run = true,
             "--no-routing" => flags.no_routing = true,
             "--yes" | "-y" => yes = true,
+            "--no-open" => no_open = true,
             "-h" | "--help" => return Ok(Command::Help),
             other => bail!("unknown argument `{other}` (try --help)"),
         }
@@ -98,10 +113,15 @@ fn parse(args: &[String]) -> Result<Command> {
     if yes && cmd != Some("reset-routing") {
         bail!("--yes only applies to `reset-routing`");
     }
+    if no_open && cmd != Some("setup") {
+        bail!("--no-open only applies to `setup`");
+    }
     Ok(match cmd {
         None => Command::Default(flags),
         Some("agent") => Command::Agent(flags),
         Some("open") => Command::Open,
+        Some("window") => Command::Window,
+        Some("setup") => Command::Setup { open: !no_open },
         Some("install") => Command::Install,
         Some("uninstall") => Command::Uninstall,
         Some("service") => Command::Service,
@@ -268,12 +288,18 @@ fn run(cmd: Command) -> Result<()> {
         Command::Service => clarim_svc::run_service(),
         Command::ResetRouting { yes } => reset_routing(yes),
         Command::Agent(flags) => agent::run(flags, false),
+        Command::Setup { open } => setup::run(open),
         Command::Default(flags) => {
-            if instance::agent_running() {
-                open::open_dashboard(clarim_core::Config::load().port)
-            } else {
-                agent::run(flags, true)
+            let running = instance::agent_running();
+            if running {
+                return open::open_dashboard(clarim_core::Config::load().port);
             }
+            // Nothing of Clarim on this PC: a double click on a freshly downloaded clarim.exe offers the guided install.
+            // "Não" keeps what this always did: the agent in this process.
+            if setup::should_offer(clarim_svc::is_installed(), running, flags == AgentFlags::default()) && setup::offer()? {
+                return Ok(());
+            }
+            agent::run(flags, true)
         }
         Command::Open => {
             if !instance::agent_running() {
@@ -281,6 +307,7 @@ fn run(cmd: Command) -> Result<()> {
             }
             open::open_dashboard(clarim_core::Config::load().port)
         }
+        Command::Window => window::run(clarim_core::Config::load().port),
     }
 }
 
@@ -299,8 +326,9 @@ fn main() -> ExitCode {
     };
     // Long-running modes and install/uninstall log to a file (a GUI-subsystem exe, an elevated run especially,
     // often has no console to print an error on; the file is what survives). The log is mirrored to stderr.
-    let installing = matches!(cmd, Command::Install | Command::Uninstall);
-    let to_file = installing || matches!(cmd, Command::Default(_) | Command::Agent(_) | Command::Service);
+    let installing = matches!(cmd, Command::Install | Command::Uninstall | Command::Setup { .. });
+    // (`window` too: a GUI-subsystem process has no console, and why WebView2 failed is only worth something in the log)
+    let to_file = installing || matches!(cmd, Command::Default(_) | Command::Agent(_) | Command::Service | Command::Window);
     if installing {
         logging::init_install();
     } else {
@@ -311,6 +339,11 @@ fn main() -> ExitCode {
         Err(e) if e.is::<agent::AlreadyRunning>() => {
             log::info!("{e}; exiting with code {}", agent::EXIT_ALREADY_RUNNING);
             ExitCode::from(agent::EXIT_ALREADY_RUNNING)
+        }
+        // the summary dialog already told the user; the exit code is for the launcher that waits for this process
+        Err(e) if e.is::<setup::Incomplete>() => {
+            log::warn!("{e}");
+            ExitCode::from(e.downcast_ref::<setup::Incomplete>().map_or(1, |i| i.0))
         }
         Err(e) => {
             if to_file {
@@ -335,6 +368,9 @@ mod tests {
     fn parses_subcommands() {
         assert_eq!(p(&[]).unwrap(), Command::Default(AgentFlags::default()));
         assert_eq!(p(&["open"]).unwrap(), Command::Open);
+        assert_eq!(p(&["window"]).unwrap(), Command::Window);
+        assert_eq!(p(&["setup"]).unwrap(), Command::Setup { open: true });
+        assert_eq!(p(&["setup", "--no-open"]).unwrap(), Command::Setup { open: false });
         assert_eq!(p(&["install"]).unwrap(), Command::Install);
         assert_eq!(p(&["uninstall"]).unwrap(), Command::Uninstall);
         assert_eq!(p(&["service"]).unwrap(), Command::Service);
@@ -381,5 +417,10 @@ mod tests {
         assert!(p(&["devices", "--dry-run"]).is_err());
         assert!(p(&["agent", "--yes"]).is_err());
         assert!(p(&["--yes"]).is_err());
+        assert!(p(&["agent", "--no-open"]).is_err());
+        assert!(p(&["--no-open"]).is_err());
+        assert!(p(&["window", "--dry-run"]).is_err());
+        assert!(p(&["setup", "--dry-run"]).is_err());
+        assert!(p(&["setup", "--yes"]).is_err());
     }
 }

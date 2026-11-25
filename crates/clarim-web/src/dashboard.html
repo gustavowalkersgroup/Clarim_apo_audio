@@ -20,6 +20,11 @@
   --warn: #f2c14e; --warn-bg: rgba(242, 193, 78, .12);
   --track: #3a4150; --focus: #9bdcff;
   --m-ok: #4cc2ff; --m-hot: #f2c14e; --m-clip: #ff6b63;
+  /* Surfaces. Opaque here (the "solid" look); the glass blocks below swap these seven. */
+  --page: var(--bg);                                 /* behind everything */
+  --card: var(--surface); --card-strong: var(--surface2);
+  --field: var(--surface2);                          /* selects, buttons: controls inside cards */
+  --card-line: var(--line); --card-fx: none; --blur: none;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -34,10 +39,53 @@
     --m-ok: #0a8fd6; --m-hot: #c98a00; --m-clip: #d92d20;
   }
 }
+/* Glass (after Apple's Liquid Glass principles): only the cards and the controls floating over the page are glass, text
+   stays on grounds at least 70% opaque (WCAG AA, measured over a bright simulated wallpaper), a 1px light border and an inner highlight give the edge, and colour
+   tints only for state (active, warning, error). The desktop app window tells which look it has with
+   <html data-backdrop="acrylic|mica|solid"> (window.rs): acrylic and mica let the OS backdrop show through a transparent
+   page and the cards are plain translucent; no attribute (a browser) paints a soft gradient page and blurs behind the
+   cards; "solid" is today's opaque look, and so is reduced transparency or forced colors. */
+html:not([data-backdrop=solid]) {
+  --page: radial-gradient(900px 560px at 8% -8%, rgba(76, 194, 255, .20), transparent 62%),
+          radial-gradient(760px 520px at 100% 4%, rgba(131, 110, 255, .16), transparent 60%),
+          linear-gradient(180deg, #11141b, #0b0d12);
+  --card: rgba(24, 28, 37, .76); --card-strong: rgba(31, 36, 47, .90); --field: rgba(255, 255, 255, .07);
+  --card-line: rgba(255, 255, 255, .13);
+  --card-fx: inset 0 1px 0 rgba(255, 255, 255, .10), 0 8px 28px rgba(0, 0, 0, .30);
+  --blur: blur(18px) saturate(1.4);
+}
+@media (prefers-color-scheme: light) {
+  html:not([data-backdrop=solid]) {
+    --page: radial-gradient(900px 560px at 8% -8%, rgba(10, 108, 179, .16), transparent 62%),
+            radial-gradient(760px 520px at 100% 4%, rgba(131, 110, 255, .14), transparent 60%),
+            linear-gradient(180deg, #f6f8fc, #e9edf5);
+    --card: rgba(255, 255, 255, .70); --card-strong: rgba(255, 255, 255, .90); --field: rgba(255, 255, 255, .65);
+    --card-line: rgba(255, 255, 255, .80);
+    --card-fx: inset 0 1px 0 #fff, 0 0 0 1px rgba(30, 40, 60, .06), 0 8px 28px rgba(30, 40, 70, .12);
+  }
+}
+/* the OS draws the backdrop (and the blur) behind the transparent page */
+html[data-backdrop=acrylic], html[data-backdrop=mica] {
+  --page: transparent; --blur: none;
+  /* the OS already blurs the wallpaper: cards only need a light tint so the backdrop shows through them too */
+  --card: rgba(18, 22, 30, .30); --card-strong: rgba(24, 28, 37, .62); --field: rgba(255, 255, 255, .08);
+  scrollbar-color: color-mix(in srgb, var(--text) 35%, transparent) transparent;
+}
+@media (prefers-color-scheme: light) {
+  html[data-backdrop=acrylic], html[data-backdrop=mica] {
+    --card: rgba(255, 255, 255, .34); --card-strong: rgba(255, 255, 255, .72); --field: rgba(255, 255, 255, .40);
+  }
+}
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  html:not([data-backdrop=solid]) {
+    --page: var(--bg); --card: var(--surface); --card-strong: var(--surface2); --field: var(--surface2);
+    --card-line: var(--line); --card-fx: none; --blur: none;
+  }
+}
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html { background: var(--bg); }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 var(--font); }
+html { background: var(--page); background-attachment: fixed; }
+body { margin: 0; color: var(--text); font: 14px/1.4 var(--font); }
 h1, h2, h3, p { margin: 0; }
 main { display: contents; }
 /* The page grows with its content and scrolls vertically when it must; only the app lists scroll inside their cards. */
@@ -50,19 +98,19 @@ main { display: contents; }
 .logo { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 650; letter-spacing: .2px; }
 .logo svg { width: 24px; height: 24px; }
 .grow { flex: 1; }
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--ctl); font-size: 13px; background: var(--surface); }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--ctl); font-size: 13px; background: var(--card); backdrop-filter: var(--blur); }
 .chip .g { font-size: 12px; }
 .chip[data-s="ok"] { border-color: var(--accent); color: var(--accent); }
 .chip[data-s="err"] { border-color: var(--danger); color: var(--danger); background: var(--danger-bg); font-weight: 600; }
 .chip[data-s="off"], .chip[data-s="wait"] { color: var(--muted); }
-.icon-btn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface); color: var(--text); cursor: pointer; }
+.icon-btn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--ctl); background: var(--card); backdrop-filter: var(--blur); color: var(--text); cursor: pointer; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .icon-btn svg { width: 18px; height: 18px; }
 .icon-btn.spin svg { animation: spin .7s linear; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* cards, rows */
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.card { background: var(--card); border: 1px solid var(--card-line); border-radius: 12px; padding: 12px 14px; box-shadow: var(--card-fx); backdrop-filter: var(--blur); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .card-head h2, .sec-head h2 { font-size: 16px; font-weight: 650; }
 .mic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 26px; }
@@ -79,9 +127,10 @@ main { display: contents; }
 .head-l { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .foot { font: 12px var(--mono); color: var(--muted); padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; }
 
-select { width: 100%; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
+select { width: 100%; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--field); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
+select option { background: var(--surface2); }   /* the open list is a popup: it must stay opaque */
 select:disabled { opacity: .5; }
-.btn { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--field); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: .55; cursor: default; }
 .btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
@@ -111,7 +160,7 @@ input[type=range].big { height: 26px; }
 .sw input:disabled ~ .trk { opacity: .5; }
 
 /* segmented */
-.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--ctl); border-radius: 9px; background: var(--surface2); padding: 2px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--ctl); border-radius: 9px; background: var(--field); padding: 2px; }
 .seg label { position: relative; display: block; }
 .seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .seg span { display: block; text-align: center; padding: 4px 6px; border-radius: 7px; font-size: 13px; }
@@ -171,8 +220,11 @@ input[type=range].big { height: 26px; }
 .setup p { font-weight: 600; }
 .setup p.hint { font-weight: 400; margin-top: 2px; }
 .setup-act { margin-top: 8px; }
+.onb ol { margin: 6px 0 8px; padding-left: 22px; font-size: 13px; }
+.onb li { margin: 2px 0; }
+.onb .banner { margin-bottom: 8px; }
 .toasts { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 10; width: min(520px, calc(100vw - 32px)); }
-.toast { display: flex; gap: 10px; align-items: flex-start; padding: 9px 13px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--ctl); border-left-width: 5px; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: 13px; cursor: pointer; }
+.toast { display: flex; gap: 10px; align-items: flex-start; padding: 9px 13px; border-radius: 10px; background: var(--card-strong); backdrop-filter: var(--blur); border: 1px solid var(--ctl); border-left-width: 5px; box-shadow: 0 6px 20px rgba(0,0,0,.35); font-size: 13px; cursor: pointer; }
 .toast.err { border-color: var(--danger); }
 .toast.info { border-color: var(--accent); }
 .toast.err .g { color: var(--danger); }
@@ -193,7 +245,7 @@ input[type=range].big { height: 26px; }
 .ch-vol { display: flex; align-items: center; justify-content: space-between; }
 .pct { font-size: 30px; font-weight: 650; line-height: 1; font-variant-numeric: tabular-nums; }
 .pct small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 2px; }
-.mute { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; min-width: 94px; justify-content: center; }
+.mute { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--ctl); background: var(--field); color: var(--text); font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; min-width: 94px; justify-content: center; }
 .mute svg { width: 18px; height: 18px; flex: none; }
 .mute:hover { border-color: var(--accent); }
 .mute.on { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); font-weight: 650; }
@@ -234,6 +286,18 @@ input[type=range].big { height: 26px; }
   <div id="sonar" class="banner warn" role="status" hidden><span class="g" id="sonar-g" aria-hidden="true">&#9888;&#xFE0E;</span><span id="sonar-t"></span></div>
 
   <main inert>
+    <section class="card onb" id="onb" aria-labelledby="h-onb" hidden>
+      <div class="card-head"><h2 id="h-onb">Primeiros passos</h2></div>
+      <p>Falta só uma coisa para as suas chamadas usarem o microfone limpo do Clarim:</p>
+      <ol>
+        <li>No Discord, Meet ou Zoom, escolha <strong>CABLE Output</strong> como microfone (entrada de áudio).</li>
+        <li>Desligue o controle automático de ganho do app (no Discord: “Controle automático de ganho”), para a sua voz não subir e descer.</li>
+      </ol>
+      <p id="onb-ok" class="hint ok" hidden><span class="g" aria-hidden="true">&#10003; </span>VB-Cable (microfone virtual) encontrado.</p>
+      <div id="onb-miss" class="banner warn act" role="status" hidden><span class="g" aria-hidden="true">&#9888;&#xFE0E;</span><span class="t">VB-Cable (microfone virtual) não encontrado. Se acabou de instalar, reinicie o computador.</span><a class="btn primary" style="text-decoration:none" href="https://vb-audio.com/Cable/" target="_blank" rel="noopener noreferrer">Instalar VB-Cable</a></div>
+      <div class="setup-act"><button type="button" class="btn primary" id="onb-done">Entendi</button></div>
+    </section>
+
     <section class="card" aria-labelledby="h-mic">
       <div class="card-head">
         <div class="head-l"><h2 id="h-mic">Microfone</h2><span class="pill call" id="call-pill" hidden></span></div>
@@ -1025,9 +1089,22 @@ function renderRouting() {
   $('#routing-note').hidden = on;   // the Sonar hint gives no reason for "off" (it may be the user's choice or --no-routing)
 }
 
+/** "Primeiros passos": shown until the user says "Entendi"; also tells whether the virtual mic exists. */
+function renderOnboarding() {
+  const show = !S.config.onboarding_done;
+  $('#onb').hidden = !show;
+  $('#onb-ok').hidden = !show || !S.virtual_mic_found;
+  $('#onb-miss').hidden = !show || S.virtual_mic_found;
+}
+$('#onb-done').addEventListener('click', () => {
+  S.config.onboarding_done = true; renderOnboarding();   // gone at once; the next state confirms
+  queue(() => api('/api/onboarding/done', {}));
+});
+
 function render() {
   $('main').inert = false; $('#routing').disabled = false; $('#refresh').disabled = false;
   $('#routing').checked = S.config.routing_enabled;
+  renderOnboarding();
   renderRouting();
   renderMic();
   renderChannels();

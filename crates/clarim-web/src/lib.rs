@@ -219,11 +219,12 @@ fn api(ctx: &Ctx, req: &mut Request, method: &Method, path: &str) -> Reply {
             b.set_eq_device(&r.device_id, r.enabled)
         }),
         (Method::Post, "/api/audio/restart") => done(b.restart_audio()),
+        (Method::Post, "/api/onboarding/done") => done(b.finish_onboarding()),
         (_, "/api/state" | "/api/meters") => Reply::not_allowed("GET"),
         (
             _,
             "/api/mic" | "/api/channel" | "/api/output_eq" | "/api/assign" | "/api/routing" | "/api/calibrate" | "/api/refresh"
-            | "/api/eq_apo/install" | "/api/eq_apo/device" | "/api/audio/restart",
+            | "/api/eq_apo/install" | "/api/eq_apo/device" | "/api/audio/restart" | "/api/onboarding/done",
         ) => Reply::not_allowed("POST"),
         _ => Reply::err(404, "Não encontrado."),
     }
@@ -375,12 +376,16 @@ mod tests {
 
     #[test]
     fn dashboard_makes_no_external_requests() {
-        // The only absolute URLs allowed are the user-clicked download links: VB-Cable and Equalizer APO.
+        // The only absolute URLs allowed are the user-clicked download links: VB-Cable (in the "Primeiros passos" card and
+        // in the mic card's missing-cable warning) and Equalizer APO.
         let urls: Vec<&str> = DASHBOARD_HTML
             .split(['"', '\'', ' ', '(', ')'])
             .filter(|w| w.starts_with("http://") || w.starts_with("https://"))
             .collect();
-        assert_eq!(urls, ["https://vb-audio.com/Cable/", "https://sourceforge.net/projects/equalizerapo/"]);
+        assert_eq!(
+            urls,
+            ["https://vb-audio.com/Cable/", "https://vb-audio.com/Cable/", "https://sourceforge.net/projects/equalizerapo/"]
+        );
         assert!(!DASHBOARD_HTML.contains("@import"));
     }
 
@@ -417,6 +422,12 @@ mod tests {
             "/api/eq_apo/install",
             "/api/eq_apo/device",
             "/api/audio/restart",
+            // first steps card (after the guided install)
+            "Primeiros passos",
+            "CABLE Output",
+            "Instalar VB-Cable",
+            "Entendi",
+            "/api/onboarding/done",
             // calls: voice AGC, leak warnings, Windows mic volume guard
             "Volume automático",
             "Mantém sua voz no mesmo volume na chamada: não estoura nem fica baixa.",

@@ -12,6 +12,11 @@
 //! audio device registry (`apo_plan` decides, `apo_reg` writes, `apo_service` sequences and validates), and
 //! restart Windows Audio so the change takes effect (`audio_restart`). The agent calls `apo_status`,
 //! `apo_install`, `apo_set_device` and `apo_restart_audio`; docs/eqapo.md has the registry mapping.
+//!
+//! `vbcable` is the odd one out: the guided install (`clarim setup`) uses it from the elevated setup process, not
+//! from the service, because VB-Audio's own installer has a window the user must click through. That install calls
+//! `install` only when the service is missing (`start_installed` for one that is stopped) and `uninstall` to undo a first
+//! install that failed half way.
 
 #[macro_use]
 mod user_error;
@@ -26,10 +31,12 @@ mod audiodg;
 mod eqapo;
 mod sha256;
 mod supervisor;
+pub mod vbcable;
 
 pub use apo_proto::{apo_install, apo_restart_audio, apo_set_device, apo_status};
 pub use apo_service::ApoServiceStatus;
 pub use eqapo::{eqapo_send, eqapo_service_available};
+pub use user_error::user_text;
 
 /// The Equalizer APO version the service installs (the pinned installer), and its download size in MB
 /// (SourceForge lists 12.0 MB), for the dashboard text.
@@ -529,6 +536,16 @@ pub fn is_installed() -> bool {
     ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .and_then(|m| m.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS))
         .is_ok()
+}
+
+/// Needs admin: starts the installed service if it is stopped (running already is fine) and changes nothing else. For the
+/// guided install on a PC that already has the service, which it must not replace.
+pub fn start_installed() -> Result<()> {
+    let manager = admin_manager()?;
+    match open_existing(&manager, ServiceAccess::START)? {
+        Some(service) => start_service(&service),
+        None => bail!("the Clarim service is not installed"),
+    }
 }
 
 define_windows_service!(ffi_service_main, service_main);

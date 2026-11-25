@@ -23,10 +23,10 @@ use crate::{apo_reg, sha256};
 
 /// The official x64 installer of Equalizer APO 1.4.2 on SourceForge (the project's own download page).
 pub(crate) const APO_URL: &str = "https://sourceforge.net/projects/equalizerapo/files/1.4.2/EqualizerAPO-x64-1.4.2.exe/download";
-/// Its SHA-256. Source: the `checksum64` (type sha256) of the Chocolatey community package `equalizerapo`
-/// 1.4.2, whose install script points at the same URL; the same hash appears in a public ANY.RUN analysis of
-/// the file. SourceForge itself publishes no SHA-256 and the installer was NOT downloaded to double-check
-/// (docs/eqapo.md): a wrong value here only makes the install refuse ("hash diferente"), never run a file.
+/// Its SHA-256. First taken from the `checksum64` (type sha256) of the Chocolatey community package `equalizerapo`
+/// 1.4.2 (whose install script points at the same URL; the same hash is in a public ANY.RUN analysis), then checked
+/// against a real download of this URL on 2026-11-25: it matches. SourceForge itself publishes no SHA-256. A wrong
+/// value here would only make the install refuse ("hash diferente"), never run a file.
 pub(crate) const APO_SHA256: &str = "7403be7427bbe1936a40dded082829b6e217fc4f5990fee5cba501f0ae055afa";
 pub(crate) const INSTALLER_FILE: &str = "EqualizerAPO-x64-1.4.2.exe";
 
@@ -92,18 +92,26 @@ pub(crate) fn wait_child(child: &mut Child, timeout: Duration, cancel: &AtomicBo
     }
 }
 
-fn system_exe(name: &str) -> Result<PathBuf> {
+pub(crate) fn system_exe(name: &str) -> Result<PathBuf> {
     // An absolute path from the shell: an elevated process must not search the cwd or PATH.
     Ok(crate::known_folder(&FOLDERID_System).context("cannot locate the System32 folder")?.join(name))
 }
 
 pub(crate) fn download(cancel: &AtomicBool) -> Result<PathBuf> {
-    let dir = cache_dir();
-    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let dest = dir.join(INSTALLER_FILE);
-    let _ = fs::remove_file(&dest); // a leftover from an interrupted run
+    let dest = cache_dir().join(INSTALLER_FILE);
+    download_to(APO_URL, &dest, "o Equalizer APO", cancel)?;
+    Ok(dest)
+}
+
+/// Downloads `url` to `dest` (its folder is created) with the system `curl.exe`; a leftover `dest` is replaced and a
+/// failed download leaves nothing. `what` completes the PT-BR error ("Não foi possível baixar {what}."). The caller checks the file.
+pub(crate) fn download_to(url: &str, dest: &Path, what: &str, cancel: &AtomicBool) -> Result<()> {
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    let _ = fs::remove_file(dest); // a leftover from an interrupted run
     let mut child = Command::new(system_exe("curl.exe")?)
-        .args(curl_args(APO_URL, &dest))
+        .args(curl_args(url, dest))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -116,11 +124,11 @@ pub(crate) fn download(cancel: &AtomicBool) -> Result<PathBuf> {
         let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
     }
     match outcome {
-        Wait::Exited(status) if status.success() => Ok(dest),
+        Wait::Exited(status) if status.success() => Ok(()),
         other => {
-            let _ = fs::remove_file(&dest);
-            log::warn!("download of the Equalizer APO installer failed ({other:?}): {}", stderr.trim());
-            user_bail!("Não foi possível baixar o Equalizer APO. Verifique a conexão com a internet e tente de novo.")
+            let _ = fs::remove_file(dest);
+            log::warn!("download of {what} from {url} failed ({other:?}): {}", stderr.trim());
+            user_bail!("Não foi possível baixar {what}. Verifique a conexão com a internet e tente de novo.")
         }
     }
 }
